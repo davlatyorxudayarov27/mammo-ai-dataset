@@ -293,6 +293,7 @@ def quick_summary(path: Path) -> dict:
     has_pixels = bool(rows and cols) and (
         "PixelData" in ds or "Rows" in ds
     )
+    pir = getattr(ds, "PatientIdentityRemoved", None)
     return {
         "patient": str(getattr(ds, "PatientName", "")),
         "patient_id": str(getattr(ds, "PatientID", "")),
@@ -304,4 +305,5 @@ def quick_summary(path: Path) -> dict:
         "cols": cols,
         "frames": get_frame_count(ds) if has_pixels else 0,
         "has_pixels": has_pixels,
+        "deidentified": (str(pir).upper() == "YES") if pir is not None else False,
     }

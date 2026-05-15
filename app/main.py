@@ -42,6 +42,12 @@ ANNOT_DIR = BASE_DIR / "annotations"
 ANNOT_DIR.mkdir(exist_ok=True)
 STATIC_DIR = BASE_DIR / "static"
 
+# Avtomatik anonimlashtirish: upload paytida DICOM PHI tag'lari tozalanadi.
+# AUTO_DEIDENTIFY=0 yoki "false" o'rnatilsa — o'chiriladi (sukut: yoqilgan).
+AUTO_DEIDENTIFY = os.environ.get("AUTO_DEIDENTIFY", "1").strip().lower() not in (
+    "0", "false", "no", "off", ""
+)
+
 DEFAULT_LABELS = [
     {"name": "mass", "color": "#ff5050"},
     {"name": "calcification", "color": "#ffb000"},
@@ -434,6 +440,22 @@ async def upload(
         except Exception as e:
             out.unlink(missing_ok=True)
             raise HTTPException(status_code=400, detail=f"{f.filename}: not a valid DICOM ({e})")
+
+        # Avtomatik anonimlashtirish: PHI tag'lari tozalanadi va fayl qayta yoziladi.
+        # Box/annotation va export PHI-siz fayl ustida bajariladi.
+        deidentified_now = False
+        if AUTO_DEIDENTIFY:
+            try:
+                deid.anonymize_in_place(out)
+                ds = pydicom.dcmread(out, stop_before_pixels=True, force=True)
+                deidentified_now = True
+            except Exception as e:
+                out.unlink(missing_ok=True)
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"{f.filename}: anonymization failed ({e})",
+                )
+
         rows = int(getattr(ds, "Rows", 0) or 0)
         cols = int(getattr(ds, "Columns", 0) or 0)
         info = {
@@ -450,6 +472,7 @@ async def upload(
             "has_pixels": bool(rows and cols),
             "annotation_count": 0,
             "original_name": f.filename,
+            "deidentified": deidentified_now,
         }
         saved.append(info)
     return {"files": saved}

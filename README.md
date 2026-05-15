@@ -81,6 +81,34 @@ The dataset has been processed according to strict privacy requirements:
 
 Only anonymized identifiers such as `GROUP_XXXXX` are used.
 
+### Automatic anonymization on upload
+
+The web application automatically removes PHI tags from every uploaded
+DICOM file **before** it becomes available for boxing/annotation or
+export. Subsequent steps (annotation, AI inference, export) all operate
+on the de-identified copy — original PHI never enters the workflow.
+
+What gets removed/replaced:
+
+* `PatientName` → `ANONYMOUS^PATIENT`
+* `PatientID` → `ANON`
+* `ReferringPhysicianName`, `OperatorsName`, `InstitutionName`,
+  `StationName`, `AccessionNumber`, etc. → cleared
+* `StudyDate`/`AcquisitionDate` → year preserved, month/day set to `0101`
+* `PatientIdentityRemoved` tag set to `YES`
+* Pixel data, image dimensions, and `Modality` are **preserved** (needed
+  for AI/research)
+
+Configuration: set `AUTO_DEIDENTIFY=0` to disable (env var). Default: on.
+
+Re-anonymize existing files (CLI):
+
+```bash
+python -m app.deidentify app/uploads
+# or inside Docker:
+docker compose exec app python -m app.deidentify /app/app/uploads
+```
+
 ---
 
 ## ⚙️ Preprocessing Pipeline

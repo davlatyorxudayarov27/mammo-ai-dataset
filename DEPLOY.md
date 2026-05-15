@@ -28,6 +28,9 @@ cat > .env <<EOF
 DOMAIN=mammo.example.uz
 JWT_SECRET=$(openssl rand -base64 48)
 LOCAL_DICOM_HOST_PATH=/srv/dicom_data
+# Avtomatik DICOM anonimlashtirish (PHI tag'lari upload paytida tozalanadi).
+# Default 1. PHI saqlangan asl fayl bilan ishlash kerak bo'lsa — 0 ga o'rnating.
+AUTO_DEIDENTIFY=1
 EOF
 
 # Docker compose ishga tushirish

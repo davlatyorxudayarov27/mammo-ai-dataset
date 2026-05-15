@@ -105,3 +105,56 @@ def anonymize_to_bytes(path: Path) -> bytes:
     buf = io.BytesIO()
     ds.save_as(buf, write_like_original=False)
     return buf.getvalue()
+
+
+def anonymize_in_place(path: Path) -> None:
+    """Anonimlashtirish + faylga qayta yozish (upload paytida)."""
+    data = anonymize_to_bytes(path)
+    path.write_bytes(data)
+
+
+def is_deidentified(path: Path) -> bool:
+    """Fayl allaqachon anonimlashtirilganmi (`PatientIdentityRemoved=YES` belgisi)."""
+    try:
+        ds = pydicom.dcmread(str(path), stop_before_pixels=True, force=True)
+    except Exception:
+        return False
+    val = getattr(ds, "PatientIdentityRemoved", None)
+    return str(val).upper() == "YES" if val is not None else False
+
+
+def _cli():
+    """`python -m app.deidentify <dir>` — papkadagi barcha `.dcm` fayllarni
+    anonimlashtirish (faqat hali anonim emaslarni). Mavjud (eski) yuklar uchun."""
+    import argparse, sys
+    ap = argparse.ArgumentParser(description="Deidentify all DICOM files in a directory.")
+    ap.add_argument("path", help="Papka yo'li (mas. app/uploads)")
+    ap.add_argument("--force", action="store_true", help="Anonim deb belgilanganlarni ham qayta tozalash")
+    args = ap.parse_args()
+
+    root = Path(args.path)
+    if not root.is_dir():
+        print(f"[xato] papka topilmadi: {root}", file=sys.stderr)
+        sys.exit(2)
+
+    total = ok = skipped = failed = 0
+    for p in sorted(root.glob("*.dcm")):
+        total += 1
+        try:
+            if not args.force and is_deidentified(p):
+                skipped += 1
+                continue
+            anonymize_in_place(p)
+            ok += 1
+            print(f"  ✓ {p.name}")
+        except Exception as e:
+            failed += 1
+            print(f"  ✗ {p.name}: {e}", file=sys.stderr)
+
+    print(f"\nJami: {total} | tozalandi: {ok} | o'tkazib yuborildi: {skipped} | xato: {failed}")
+    if failed:
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    _cli()
