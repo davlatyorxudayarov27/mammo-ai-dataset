@@ -80,5 +80,10 @@ docs/screenshots/
 docs/researcher_screenshots/
 FOYDALANUVCHI_QOLLANMA.pdf
 TADQIQOTCHI_QOLLANMA.pdf
-# Eslatma: paper/*.pdf (ilmiy maqolalar) saqlanadi — ular bemor rasmsiz
+
+# ============================================================
+# DISSERTATSIYA VA ILMIY MAQOLALAR — bu repo'ga kerak emas
+# ============================================================
+dissertation/
+paper/
 
