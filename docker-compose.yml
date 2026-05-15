@@ -1,0 +1,43 @@
+services:
+  app:
+    build: .
+    container_name: mamograf-app
+    restart: unless-stopped
+    environment:
+      - LOCAL_DICOM_ROOT=/data/dicom
+      - JWT_SECRET=${JWT_SECRET:-}
+    volumes:
+      - app_uploads:/app/app/uploads
+      - app_annotations:/app/app/annotations
+      - app_models:/app/app/models
+      - app_db:/app/app
+      - ${LOCAL_DICOM_HOST_PATH:-./dicom_data}:/data/dicom:ro
+    expose:
+      - "8000"
+    networks: [internal]
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: mamograf-caddy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on: [app]
+    networks: [internal]
+
+volumes:
+  app_uploads:
+  app_annotations:
+  app_models:
+  app_db:
+  caddy_data:
+  caddy_config:
+
+networks:
+  internal:

@@ -1,0 +1,305 @@
+<!doctype html>
+<html lang="uz">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>MAMOGRAF DICOM Viewer</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E🩻%3C/text%3E%3C/svg%3E" />
+<link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+<header>
+  <button class="mobile-toggle" id="mobileSidebarBtn" title="Chap panel">☰</button>
+  <h1>MAMOGRAF</h1>
+  <div class="hint" id="status">tayyor</div>
+  <button class="mobile-toggle" id="mobileMetaBtn" title="O'ng panel">📋</button>
+  <div class="user-bar" id="userBar">
+    <span id="userInfo" hidden></span>
+    <span class="bell-wrap" id="bellWrap" hidden>
+      <button id="bellBtn" title="Bildirishnomalar">🔔<span class="bell-badge" id="bellBadge" hidden>0</span></button>
+      <div class="bell-dropdown" id="bellDropdown" hidden></div>
+    </span>
+    <button id="overviewBtn" hidden title="Annotatsiya qilingan DICOM'lar (kart ko'rinish)">🗂</button>
+    <button id="auditBtn" hidden title="Audit timeline">📜</button>
+    <button id="reviewBtn" hidden title="Tadqiqot review (pseudo-bbox tasdiqlash)">🔬</button>
+    <button id="statsBtn" hidden title="Statistika">📊</button>
+    <button id="pacsBtn" hidden title="PACS serverlar">🏥</button>
+    <button id="totpBtn" hidden title="2FA sozlash">🔒</button>
+    <button id="adminBtn" hidden title="Foydalanuvchilarni boshqarish">👥</button>
+    <button id="logoutBtn" hidden title="Chiqish">⎋</button>
+    <button id="loginBtn" hidden>Kirish</button>
+  </div>
+</header>
+
+<div class="modal" id="loginModal" hidden>
+  <div class="modal-card">
+    <h2>Kirish</h2>
+    <form id="loginForm">
+      <label>Foydalanuvchi nomi
+        <input type="text" id="loginUsername" autocomplete="username" required autofocus />
+      </label>
+      <label>Parol
+        <input type="password" id="loginPassword" autocomplete="current-password" required />
+      </label>
+      <label id="loginTotpRow" hidden>2FA kodi (6 raqam)
+        <input type="text" id="loginTotp" inputmode="numeric" maxlength="6" autocomplete="one-time-code" />
+      </label>
+      <div class="modal-err" id="loginErr"></div>
+      <div class="modal-actions">
+        <button type="submit" id="loginSubmit">Kirish</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<div class="modal" id="totpModal" hidden>
+  <div class="modal-card">
+    <div class="modal-head">
+      <h2>🔒 Ikki faktor autentifikatsiya</h2>
+      <button class="modal-close" id="totpCloseBtn">✕</button>
+    </div>
+    <div class="modal-body" id="totpBody"></div>
+  </div>
+</div>
+
+<div class="modal" id="historyModal" hidden>
+  <div class="modal-card wide">
+    <div class="modal-head">
+      <h2>📜 Annotation tarix</h2>
+      <button class="modal-close" id="historyCloseBtn">✕</button>
+    </div>
+    <div class="modal-body" id="historyBody"></div>
+  </div>
+</div>
+
+<div class="modal" id="adminModal" hidden>
+  <div class="modal-card wide">
+    <div class="modal-head">
+      <h2>👥 Foydalanuvchilarni boshqarish</h2>
+      <button class="modal-close" id="adminCloseBtn">✕</button>
+    </div>
+    <div class="modal-body" id="adminBody"></div>
+  </div>
+</div>
+
+<div class="modal" id="statsModal" hidden>
+  <div class="modal-card wide">
+    <div class="modal-head">
+      <h2>📊 Statistika</h2>
+      <button class="modal-close" id="statsCloseBtn">✕</button>
+    </div>
+    <div class="modal-body" id="statsBody"></div>
+  </div>
+</div>
+
+<div class="modal" id="auditModal" hidden>
+  <div class="modal-card wide">
+    <div class="modal-head">
+      <h2>📜 Audit timeline</h2>
+      <button class="modal-close" id="auditCloseBtn">✕</button>
+    </div>
+    <div class="modal-body" id="auditBody"></div>
+  </div>
+</div>
+
+<div class="modal" id="overviewModal" hidden>
+  <div class="modal-card wide">
+    <div class="modal-head">
+      <h2>🗂 Annotatsiyalangan DICOM'lar</h2>
+      <button class="modal-close" id="overviewCloseBtn">✕</button>
+    </div>
+    <div class="modal-body" id="overviewBody"></div>
+  </div>
+</div>
+
+<div class="modal" id="pacsModal" hidden>
+  <div class="modal-card wide">
+    <div class="modal-head">
+      <h2>🏥 PACS</h2>
+      <button class="modal-close" id="pacsCloseBtn">✕</button>
+    </div>
+    <div class="modal-body" id="pacsBody"></div>
+  </div>
+</div>
+
+<div class="modal" id="patientModal" hidden>
+  <div class="modal-card wide">
+    <div class="modal-head">
+      <h2>🧑 Bemor ko'rinishi</h2>
+      <button class="modal-close" id="patientCloseBtn">✕</button>
+    </div>
+    <div class="modal-body" id="patientBody"></div>
+  </div>
+</div>
+
+<div class="modal" id="reviewModal" hidden>
+  <div class="modal-card wide">
+    <div class="modal-head">
+      <h2>🔬 Tadqiqot review — pseudo-bbox tasdiqlash</h2>
+      <button class="modal-close" id="reviewCloseBtn">✕</button>
+    </div>
+    <div class="modal-body" id="reviewBody"></div>
+  </div>
+</div>
+
+<div class="modal" id="deidModal" hidden>
+  <div class="modal-card wide">
+    <div class="modal-head">
+      <h2>🛡 De-identifikatsiya</h2>
+      <button class="modal-close" id="deidCloseBtn">✕</button>
+    </div>
+    <div class="modal-body" id="deidBody"></div>
+  </div>
+</div>
+
+<div class="layout">
+  <aside class="sidebar">
+    <div class="tabs">
+      <button class="tab active" data-tab="uploads">Yuklangan</button>
+      <button class="tab" data-tab="local" id="localTabBtn" hidden>Lokal</button>
+      <button class="tab" data-tab="links">🔗 Bog'langan</button>
+      <button class="tab" data-tab="dashboard">📋 Mening ishim</button>
+      <button class="tab" data-tab="worklist">📥 Worklist</button>
+    </div>
+
+    <section class="pane" data-pane="uploads">
+      <div class="upload-zone" id="dropZone">
+        <p>DICOM faylni shu yerga tashlang yoki tanlang</p>
+        <input type="file" id="fileInput" multiple accept=".dcm,.dicom,application/dicom,*/*" hidden />
+        <input type="file" id="folderInput" multiple webkitdirectory directory hidden />
+        <div class="btn-row">
+          <button id="pickFiles">Fayl tanlash</button>
+          <button id="pickFolder">Papka tanlash</button>
+        </div>
+      </div>
+      <ul class="file-list" id="uploadList"></ul>
+    </section>
+
+    <section class="pane" data-pane="local" hidden>
+      <div class="crumb" id="crumb"></div>
+      <ul class="file-list" id="localList"></ul>
+    </section>
+
+    <section class="pane" data-pane="dashboard" hidden>
+      <div class="dash-controls">
+        <select id="dashStatus">
+          <option value="">Barcha statuslar</option>
+          <option value="draft">Drafts</option>
+          <option value="submitted">Submitted (kutmoqda)</option>
+          <option value="approved">Approved</option>
+          <option value="rejected">Rejected</option>
+        </select>
+        <label class="own-toggle"><input type="checkbox" id="dashOwn" /> faqat meniki</label>
+        <button id="dashRefresh" title="Yangilash">⟳</button>
+      </div>
+      <div class="dash-meta" id="dashMeta"></div>
+      <ul class="file-list" id="dashList"></ul>
+    </section>
+
+    <section class="pane" data-pane="worklist" hidden>
+      <div class="dash-controls">
+        <select id="wlStatus">
+          <option value="">Barcha statuslar</option>
+          <option value="pending">Pending</option>
+          <option value="in_progress">In progress</option>
+          <option value="done">Done</option>
+          <option value="skipped">Skipped</option>
+        </select>
+        <label class="own-toggle"><input type="checkbox" id="wlOwn" checked /> meniki</label>
+        <button id="wlRefresh" title="Yangilash">⟳</button>
+      </div>
+      <div class="dash-meta" id="wlMeta"></div>
+      <ul class="file-list" id="wlList"></ul>
+    </section>
+
+    <section class="pane" data-pane="links" hidden>
+      <div class="link-search-bar">
+        <input type="text" id="linksSearch" placeholder="Bemor / ID / fayl yo'li" />
+        <button id="linksRefresh" title="Yangilash">⟳</button>
+      </div>
+      <div class="links-meta" id="linksMeta"></div>
+      <ul class="file-list" id="linksList"></ul>
+    </section>
+  </aside>
+
+  <main class="viewer">
+    <div class="toolbar">
+      <button id="fitBtn" title="Ekranga moslash (F)">Fit</button>
+      <button id="oneToOneBtn" title="100%">1:1</button>
+      <button id="invertBtn" title="Inversiya">Invert</button>
+      <button id="resetWlBtn" title="Standart W/L">W/L reset</button>
+      <span class="sep"></span>
+      <button id="toolSelect" class="tool active" title="Tanlash (V)">▶ Select</button>
+      <button id="toolBbox" class="tool" title="Bbox chizish (B)">▭ BBox</button>
+      <button id="toolPoly" class="tool" title="Poligon chizish (P) — bosish bilan nuqta qo'yish, dblclick yoki Enter — yopish, Esc — bekor">⬢ Poly</button>
+      <select id="labelSelect" title="Label"></select>
+      <select id="biradsSelect" title="BI-RADS"><option value="">BI-RADS —</option></select>
+      <span class="sep"></span>
+      <select id="aiModelSelect" title="AI model" hidden></select>
+      <button id="aiRunBtn" title="AI tahlil yugurtirish" hidden>🤖 AI tahlil</button>
+      <span class="ai-threshold" id="aiThresholdWrap" hidden>
+        <label>≥<span id="aiConfLabel">25</span>%</label>
+        <input type="range" id="aiConfSlider" min="10" max="95" step="5" value="25" />
+      </span>
+      <button id="aiAcceptAllBtn" title="Barcha takliflarni qabul qilish" hidden>✓ Hammasini qabul</button>
+      <button id="aiClearBtn" title="AI takliflarini tozalash" hidden>✕</button>
+      <span class="sep"></span>
+      <label>Frame <input type="range" id="frameSlider" min="0" max="0" value="0" disabled /></label>
+      <span id="frameLabel">0 / 0</span>
+      <span class="zoomLbl" id="zoomLbl">100%</span>
+      <span class="save-status" id="saveStatus"></span>
+      <button id="exportBtn" title="Barcha annotatsiyalarni COCO JSON sifatida yuklab olish">⤓ Eksport</button>
+      <button id="deidBtn" title="PHI tahlil va anonimlashtirilgan DICOM yuklab olish" hidden>🛡 De-ID</button>
+      <button id="srBtn" title="Annotatsiyalarni DICOM-SR sifatida yuklab olish" hidden>📄 SR</button>
+      <button id="segBtn" title="Annotatsiyalarni DICOM-SEG (pixel mask) sifatida yuklab olish" hidden>🖼 SEG</button>
+      <button id="cStoreBtn" title="DICOM'ni PACS serverga yuborish" hidden>📤 PACS</button>
+      <select id="tplSelect" title="Annotation template'ni qo'llash" hidden></select>
+      <button id="tplSaveBtn" title="Joriy annotatsiyalarni template sifatida saqlash" hidden>💾 Tpl</button>
+      <span class="presence" id="presencePill" hidden title="Real vaqtda hamkorlar"></span>
+    </div>
+
+    <div class="canvas-wrap" id="canvasWrap">
+      <div class="canvas" id="canvas">
+        <div class="empty" id="emptyState">Chap paneldan DICOM tanlang yoki yuklang.</div>
+        <div class="img-stack" id="imgStack" hidden>
+          <img id="dicomImg" alt="" draggable="false" />
+          <svg id="annoSvg" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1 1" preserveAspectRatio="none"></svg>
+        </div>
+        <div class="sr-view" id="srView" hidden></div>
+      </div>
+    </div>
+
+    <div class="wl-bar">
+      <div class="wl-group">
+        <label>WC <input type="number" id="wcInput" step="1" /></label>
+        <input type="range" id="wcSlider" min="-2000" max="6000" value="0" />
+      </div>
+      <div class="wl-group">
+        <label>WW <input type="number" id="wwInput" step="1" min="1" /></label>
+        <input type="range" id="wwSlider" min="1" max="6000" value="1" />
+      </div>
+    </div>
+  </main>
+
+  <aside class="meta-pane">
+    <div class="tabs right">
+      <button class="tab active" data-rtab="meta">Metadata</button>
+      <button class="tab" data-rtab="anno">Annotatsiyalar <span class="badge" id="annoCount">0</span></button>
+      <button class="tab" data-rtab="report">Hisobot <span class="badge" id="reportBadge" hidden>0</span></button>
+    </div>
+    <div class="rpane" data-rpane="meta">
+      <table class="meta" id="metaTable"><tbody></tbody></table>
+    </div>
+    <div class="rpane" data-rpane="anno" hidden>
+      <div class="anno-list" id="annoList"></div>
+      <div class="anno-empty" id="annoEmpty">Annotatsiyalar yo'q. <b>BBox</b> tugmasini bosing yoki <kbd>B</kbd> bosing va rasm ustida sichqonchani sudrang.</div>
+    </div>
+    <div class="rpane" data-rpane="report" hidden>
+      <div id="reportPane"></div>
+    </div>
+  </aside>
+</div>
+
+<script src="/app.js"></script>
+</body>
+</html>

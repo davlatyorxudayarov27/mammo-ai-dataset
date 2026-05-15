@@ -1,0 +1,84 @@
+# ============================================================
+# MAMOGRAF — .gitignore
+# Qoidalar: bemor ma'lumotlarini hech qachon yuklamaslik!
+# ============================================================
+
+# --- Python / virtualenv / cache ---
+.venv/
+venv/
+env/
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# --- IDE ---
+.idea/
+.vscode/
+.claude/
+
+# --- Maxfiy kalitlar va sertifikatlar ---
+app/.jwt_secret
+*.pem
+*.key
+.env
+.env.*
+!.env.example
+
+# ============================================================
+# BEMOR MA'LUMOTLARI (PHI) — YUKLAMASLIK SHART
+# ============================================================
+# DICOM fayllar va PACS inbox (haqiqiy bemor rasmlar)
+app/uploads/
+# Annotation fayllari (DICOM ID'larga bog'langan)
+app/annotations/
+# SQLite baza (foydalanuvchilar, sessiyalar, bemorlar)
+app/db.sqlite3
+app/db.sqlite3-*
+# Bemorlar Excel
+MamologiyaInfo_.xlsx
+MamologiyaInfo_*.xlsx
+# Research datasets (haqiqiy data)
+app/research/datasets/
+app/research/__pycache__/
+
+# ============================================================
+# MODEL OG'IRLIKLARI — Git LFS yoki HuggingFace Hub orqali
+# ============================================================
+app/models/*.pt
+app/models/*.pth
+app/models/*.onnx
+app/models/*.engine
+# README.md app/models/ ichida saqlanadi
+
+# --- Installerlar / katta artifaktlar ---
+*.msi
+*.exe
+*.dmg
+
+# --- Build artefaktlar ---
+build/
+dist/
+*.spec
+
+# --- Logs ---
+*.log
+logs/
+
+# --- MS Office lock fayllar (ochiq hujjat) ---
+~$*
+*.tmp
+*.bak
+
+# ============================================================
+# SCREENSHOT'LAR VA QO'LLANMA PDF'LAR — ehtimol PHI bor
+# ============================================================
+docs/screenshots/
+docs/researcher_screenshots/
+FOYDALANUVCHI_QOLLANMA.pdf
+TADQIQOTCHI_QOLLANMA.pdf
+# Eslatma: paper/*.pdf (ilmiy maqolalar) saqlanadi — ular bemor rasmsiz
+

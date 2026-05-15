@@ -1,0 +1,1005 @@
+<!doctype html>
+<html lang="uz">
+<head>
+<meta charset="utf-8" />
+<title>MAMOGRAF — Foydalanuvchi qo'llanmasi</title>
+<style>
+@page {
+  size: A4;
+  margin: 18mm 16mm 18mm 18mm;
+  @bottom-right {
+    content: counter(page) " / " counter(pages);
+    color: #888;
+    font-size: 9pt;
+  }
+}
+body {
+  font-family: "Segoe UI", "Arial", sans-serif;
+  font-size: 10pt;
+  line-height: 1.5;
+  color: #1a1a1a;
+  margin: 0;
+}
+h1 { color: #1f6feb; border-bottom: 2px solid #1f6feb; padding-bottom: 4px; }
+h2 { color: #1f6feb; margin-top: 22px; border-bottom: 1px solid #cdd5e0; padding-bottom: 3px; page-break-after: avoid; }
+h3 { color: #2b3344; margin-top: 14px; page-break-after: avoid; }
+h4 { color: #2b3344; margin-top: 10px; }
+table { border-collapse: collapse; width: 100%; margin: 8px 0 14px; font-size: 9pt; page-break-inside: avoid; }
+table th, table td { border: 1px solid #d0d7de; padding: 4px 7px; text-align: left; vertical-align: top; }
+table th { background: #f0f4fa; font-weight: 600; }
+code, pre { background: #f4f5f7; border-radius: 3px; font-family: "Cascadia Mono", "Consolas", monospace; }
+code { padding: 1px 4px; font-size: 9pt; }
+pre { padding: 8px 10px; font-size: 8.5pt; overflow-x: auto; page-break-inside: avoid; }
+ul, ol { margin: 6px 0 12px 22px; padding: 0; }
+li { margin: 2px 0; }
+img.shot { max-width: 100%; border: 1px solid #cdd5e0; border-radius: 4px; margin: 12px 0; box-shadow: 0 2px 6px rgba(0,0,0,0.08); page-break-inside: avoid; }
+.cover { text-align: center; margin-top: 80mm; page-break-after: always; }
+.cover h1 { font-size: 26pt; border: none; }
+.cover .sub { color: #555; font-size: 13pt; margin-top: 6px; }
+.cover .meta { color: #888; font-size: 10pt; margin-top: 24px; }
+.toc { page-break-after: always; }
+.toc ul { list-style: none; margin-left: 0; }
+.toc li { margin: 3px 0; }
+.toc a { text-decoration: none; color: #1f6feb; }
+hr { border: none; border-top: 1px solid #cdd5e0; margin: 18px 0; }
+</style>
+</head>
+<body>
+
+    <div class="cover">
+      <h1>MAMOGRAF DICOM Viewer</h1>
+      <div class="sub">Foydalanuvchi qo'llanmasi</div>
+      <div class="meta">2026-05-06</div>
+    </div>
+    <div class="toc">
+      <h2 style="border:none">Mundarija</h2>
+      <ul><li style="margin-left:0px">1. Boshlash</li><li style="margin-left:0px">2. Asosiy interfeys</li><li style="margin-left:0px">3. Klaviatura yorliqlari</li><li style="margin-left:0px">4. DICOM ochish va ko'rish</li><li style="margin-left:0px">5. Annotatsiya jarayoni</li><li style="margin-left:0px">6. Hisobot tab (xlsx integratsiyasi)</li><li style="margin-left:0px">7. AI tahlil</li><li style="margin-left:0px">8. Templates (qayta ishlatiladigan annotatsiyalar)</li><li style="margin-left:0px">9. PACS integratsiyasi</li><li style="margin-left:0px">10. Eksport formatlari</li><li style="margin-left:0px">11. Notifications (🔔)</li><li style="margin-left:0px">12. Admin paneli (👥)</li><li style="margin-left:0px">13. Statistika (📊)</li><li style="margin-left:0px">14. Audit timeline (📜)</li><li style="margin-left:0px">15. Annotated DICOMs overview (🗂)</li><li style="margin-left:0px">16. 2FA (Two-Factor Authentication)</li><li style="margin-left:0px">17. Worklist (📥)</li><li style="margin-left:0px">18. WebSocket — real-time hamkorlik</li><li style="margin-left:0px">19. CLI komandalari to'plami</li><li style="margin-left:0px">20. Mobile (telefon/planshet)</li><li style="margin-left:0px">21. Tipik ish jarayonlari</li><li style="margin-left:0px">22. Tez-tez beriladigan savollar</li><li style="margin-left:0px">23. Texnik ma'lumotlar</li><li style="margin-left:0px">24. Yordam</li></ul>
+    </div>
+    
+<h1 id="mamograf-dicom-viewer-foydalanuvchi-qollanmasi">MAMOGRAF DICOM Viewer — Foydalanuvchi qo'llanmasi</h1>
+<p>To'liq mammografiya annotatsiya platformasi: DICOM ko'rish, annotatsiya
+qilish, AI tahlil, hisobot, audit, PACS integratsiyasi, ko'p foydalanuvchili
+ish jarayoni.</p>
+<hr />
+<h2 id="1-boshlash">1. Boshlash</h2>
+<p><img class="shot" alt="01_login" src="screenshots/01_login.png" /></p>
+<h3 id="11-birinchi-marta-ishga-tushirish">1.1 Birinchi marta ishga tushirish</h3>
+<pre><code class="language-cmd">run.bat
+</code></pre>
+<p>Birinchi safar <code>.venv/</code> virtualenv yaratiladi va paketlar o'rnatiladi (~5
+daqiqa). Keyingi safar darhol server ishga tushadi.</p>
+<h3 id="12-birinchi-admin-yarating">1.2 Birinchi admin yarating</h3>
+<pre><code class="language-cmd">.venv\Scripts\python.exe -m app.manage_users create admin --role admin
+</code></pre>
+<p>Parol so'raladi.</p>
+<h3 id="13-brauzerda-oching">1.3 Brauzerda oching</h3>
+<pre><code>http://127.0.0.1:8000
+</code></pre>
+<p>Login modal ko'rinadi → admin uchun yaratgan parolingizni kiriting.</p>
+<h3 id="14-3-ta-rol">1.4 3 ta rol</h3>
+<table>
+<thead>
+<tr>
+<th>Rol</th>
+<th>Vakolatlar</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>admin</strong></td>
+<td>Hammasini bajaradi: foydalanuvchilarni boshqarish, sozlamalar, audit eksport, status'larni majburlash</td>
+</tr>
+<tr>
+<td><strong>reviewer</strong></td>
+<td>Annotatsiyalarni approve/reject qiladi, statistikani ko'radi, PACS sozlamalari</td>
+</tr>
+<tr>
+<td><strong>annotator</strong></td>
+<td>O'z annotatsiyalarini chizadi, submit qiladi, AI takliflarini qabul qiladi</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="2-asosiy-interfeys">2. Asosiy interfeys</h2>
+<p><img class="shot" alt="02_empty_ui" src="screenshots/02_empty_ui.png" /></p>
+<pre><code>┌──────────────────────── HEADER ────────────────────────┐
+│ ☰  MAMOGRAF   tayyor   🔔  📜📊🏥👥🔒  user (role)  ⎋  │
+├─────────┬───────────────────────────┬──────────────────┤
+│         │       TOOLBAR             │                  │
+│ CHAP    │                           │  O'NG PANEL      │
+│ PANEL   │                           │                  │
+│ (4 tab) │     DICOM RASMI           │  (3 tab)         │
+│         │                           │                  │
+│         │                           │                  │
+│         ├───────────────────────────┤                  │
+│         │       W/L SLAYDERLAR      │                  │
+└─────────┴───────────────────────────┴──────────────────┘
+</code></pre>
+<h3 id="21-header-yuqorigi-panel">2.1 Header (yuqorigi panel)</h3>
+<table>
+<thead>
+<tr>
+<th>Element</th>
+<th>Vazifa</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>☰</strong> (chap)</td>
+<td>Telefonda — chap panelni ochadi/yopadi</td>
+</tr>
+<tr>
+<td><strong>MAMOGRAF</strong></td>
+<td>Loyiha nomi</td>
+</tr>
+<tr>
+<td><strong>tayyor</strong></td>
+<td>Status xabarlari (yuklash, AI ishlamoqda, xatolar)</td>
+</tr>
+<tr>
+<td><strong>📋</strong> (o'ng)</td>
+<td>Telefonda — o'ng panelni ochadi/yopadi</td>
+</tr>
+<tr>
+<td><strong>🔔</strong></td>
+<td>Bildirishnomalar (qizil dot — o'qilmagan)</td>
+</tr>
+<tr>
+<td><strong>📜</strong></td>
+<td>Audit timeline (admin/reviewer)</td>
+</tr>
+<tr>
+<td><strong>📊</strong></td>
+<td>Statistika (admin/reviewer)</td>
+</tr>
+<tr>
+<td><strong>🏥</strong></td>
+<td>PACS serverlar (admin/reviewer)</td>
+</tr>
+<tr>
+<td><strong>🗂</strong></td>
+<td>Annotatsiyalangan DICOM'lar overview</td>
+</tr>
+<tr>
+<td><strong>👥</strong></td>
+<td>Foydalanuvchilarni boshqarish (admin)</td>
+</tr>
+<tr>
+<td><strong>🔒/🔓</strong></td>
+<td>2FA sozlash (yopiq/ochiq)</td>
+</tr>
+<tr>
+<td><strong>user (role)</strong></td>
+<td>Joriy foydalanuvchi</td>
+</tr>
+<tr>
+<td><strong>⎋</strong></td>
+<td>Chiqish</td>
+</tr>
+</tbody>
+</table>
+<h3 id="22-chap-panel-4-ta-tab">2.2 Chap panel — 4 ta tab</h3>
+<table>
+<thead>
+<tr>
+<th>Tab</th>
+<th>Mazmuni</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Yuklangan</strong></td>
+<td>Web orqali yuklangan DICOM'lar (drag &amp; drop yoki tugmadan)</td>
+</tr>
+<tr>
+<td><strong>Lokal</strong></td>
+<td>Server diskidagi DICOM'lar (<code>LOCAL_DICOM_ROOT</code> env)</td>
+</tr>
+<tr>
+<td><strong>🔗 Bog'langan</strong></td>
+<td>xlsx bemorga bog'langan DICOM'lar (qidiruv bilan)</td>
+</tr>
+<tr>
+<td><strong>📋 Mening ishim</strong></td>
+<td>Status filter bilan annotatsiyalarning ro'yxati</td>
+</tr>
+<tr>
+<td><strong>📥 Worklist</strong></td>
+<td>DICOM ish navbati (CSV import yoki MWL'dan)</td>
+</tr>
+</tbody>
+</table>
+<p>Har bir DICOM yonida:
+- 🟢 yashil pill — annotatsiyalar soni
+- ☑ checkbox — multi-tanlash (AI batch uchun)</p>
+<h3 id="23-toolbar-markaz-yuqori">2.3 Toolbar (markaz, yuqori)</h3>
+<pre><code>[Fit] [1:1] [Invert] [W/L reset] | [Select] [BBox] [Poly] [label v] [BI-RADS v]
+| [AI model v] [🤖 AI tahlil] [≥25%] [✓ Qabul] [✕] | Frame [—] | 100%
+| saqlandi | [⤓ Eksport] [🛡 De-ID] [📄 SR] [🖼 SEG] [📤 PACS] [📑 Tpl] [💾 Tpl]
+</code></pre>
+<table>
+<thead>
+<tr>
+<th>Tugma</th>
+<th>Vazifa</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Fit</strong></td>
+<td>Rasmni ekranga moslash (Hotkey: F)</td>
+</tr>
+<tr>
+<td><strong>1:1</strong></td>
+<td>100% zoom (Hotkey: 0)</td>
+</tr>
+<tr>
+<td><strong>Invert</strong></td>
+<td>Ranglarni o'zgartirish (Hotkey: I)</td>
+</tr>
+<tr>
+<td><strong>W/L reset</strong></td>
+<td>Window/Level standart qiymatga qaytaradi</td>
+</tr>
+<tr>
+<td><strong>▶ Select</strong></td>
+<td>Tanlash rejimi (Hotkey: V)</td>
+</tr>
+<tr>
+<td><strong>▭ BBox</strong></td>
+<td>To'rtburchak chizish rejimi (Hotkey: B)</td>
+</tr>
+<tr>
+<td><strong>⬢ Poly</strong></td>
+<td>Polygon chizish rejimi (Hotkey: P)</td>
+</tr>
+<tr>
+<td><strong>label</strong></td>
+<td>Yangi annotatsiya uchun label tanlash (mass / calcification / ...)</td>
+</tr>
+<tr>
+<td><strong>BI-RADS</strong></td>
+<td>BI-RADS klassifikatsiyasi (1, 2, 3, 4A, 4B, 4C, 5, 6)</td>
+</tr>
+<tr>
+<td><strong>AI model</strong></td>
+<td>YOLO modelini tanlash</td>
+</tr>
+<tr>
+<td><strong>🤖 AI tahlil</strong></td>
+<td>Joriy DICOM'da AI ni yugurtirish</td>
+</tr>
+<tr>
+<td><strong>≥25%</strong></td>
+<td>AI confidence threshold (slayder, 10-95%)</td>
+</tr>
+<tr>
+<td><strong>✓ Qabul</strong></td>
+<td>Barcha ko'rinadigan AI takliflarini annotatsiyaga aylantirish</td>
+</tr>
+<tr>
+<td><strong>✕</strong></td>
+<td>AI takliflarini tozalash</td>
+</tr>
+<tr>
+<td><strong>Frame</strong></td>
+<td>Multi-frame DICOM'da frame'ni tanlash</td>
+</tr>
+<tr>
+<td><strong>100%</strong></td>
+<td>Joriy zoom darajasi</td>
+</tr>
+<tr>
+<td><strong>saqlandi</strong></td>
+<td>Auto-save indikatori</td>
+</tr>
+<tr>
+<td><strong>⤓ Eksport</strong></td>
+<td>Barcha annotatsiyalarni COCO JSON sifatida tushirish</td>
+</tr>
+<tr>
+<td><strong>🛡 De-ID</strong></td>
+<td>DICOM'ni anonimlashtirib yuklab olish</td>
+</tr>
+<tr>
+<td><strong>📄 SR</strong></td>
+<td>Annotatsiyalarni DICOM-SR (matn) sifatida</td>
+</tr>
+<tr>
+<td><strong>🖼 SEG</strong></td>
+<td>Annotatsiyalarni DICOM-SEG (pixel mask) sifatida</td>
+</tr>
+<tr>
+<td><strong>📤 PACS</strong></td>
+<td>DICOM'ni PACS serverga yuborish</td>
+</tr>
+<tr>
+<td><strong>📑 Tpl</strong></td>
+<td>Saqlangan template'larni qo'llash</td>
+</tr>
+<tr>
+<td><strong>💾 Tpl</strong></td>
+<td>Joriy annotatsiyalarni template sifatida saqlash</td>
+</tr>
+</tbody>
+</table>
+<h3 id="24-ong-panel-3-ta-tab">2.4 O'ng panel — 3 ta tab</h3>
+<table>
+<thead>
+<tr>
+<th>Tab</th>
+<th>Mazmuni</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Metadata</strong></td>
+<td>DICOM tags (PatientName, ID, DOB, manufacturer, va h.k.)</td>
+</tr>
+<tr>
+<td><strong>Annotatsiyalar [N]</strong></td>
+<td>Annotatsiyalar ro'yxati + status + transition tugmalar</td>
+</tr>
+<tr>
+<td><strong>Hisobot [N]</strong></td>
+<td>xlsx'dan kelgan klinik hisobot (mos kelgan bemor)</td>
+</tr>
+</tbody>
+</table>
+<h3 id="25-pastki-panel-windowlevel">2.5 Pastki panel (Window/Level)</h3>
+<table>
+<thead>
+<tr>
+<th>Slayder</th>
+<th>Vazifa</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>WC</strong></td>
+<td>Window Center (rasmning markaz qoramligi)</td>
+</tr>
+<tr>
+<td><strong>WW</strong></td>
+<td>Window Width (kontrast diapazoni)</td>
+</tr>
+</tbody>
+</table>
+<p>Tipik mammografiya uchun:
+- WC ~30000, WW ~50000 (umumiy ko'rinish)
+- WC ~40000, WW ~10000 (yumshoq to'qima detali)</p>
+<hr />
+<h2 id="3-klaviatura-yorliqlari">3. Klaviatura yorliqlari</h2>
+<table>
+<thead>
+<tr>
+<th>Tugma</th>
+<th>Vazifa</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>V</strong></td>
+<td>Tanlash rejimi</td>
+</tr>
+<tr>
+<td><strong>B</strong></td>
+<td>BBox chizish</td>
+</tr>
+<tr>
+<td><strong>P</strong></td>
+<td>Polygon chizish</td>
+</tr>
+<tr>
+<td><strong>F</strong></td>
+<td>Fit (ekranga moslash)</td>
+</tr>
+<tr>
+<td><strong>0</strong></td>
+<td>1:1 zoom</td>
+</tr>
+<tr>
+<td><strong>+ / =</strong></td>
+<td>Zoom in</td>
+</tr>
+<tr>
+<td><strong>- / _</strong></td>
+<td>Zoom out</td>
+</tr>
+<tr>
+<td><strong>I</strong></td>
+<td>Invert (ranglarni teskari)</td>
+</tr>
+<tr>
+<td><strong>J / ↓</strong></td>
+<td>Keyingi annotatsiyaga o'tish</td>
+</tr>
+<tr>
+<td><strong>K / ↑</strong></td>
+<td>Oldingi annotatsiyaga</td>
+</tr>
+<tr>
+<td><strong>← / →</strong></td>
+<td>Frame oldingi/keyingi (multi-frame)</td>
+</tr>
+<tr>
+<td><strong>S</strong></td>
+<td>Submit (own draft)</td>
+</tr>
+<tr>
+<td><strong>Y</strong></td>
+<td>Approve (reviewer)</td>
+</tr>
+<tr>
+<td><strong>N</strong></td>
+<td>Reject + sabab (reviewer)</td>
+</tr>
+<tr>
+<td><strong>R</strong></td>
+<td>Recall (status'ni draft'ga qaytarish)</td>
+</tr>
+<tr>
+<td><strong>Delete</strong></td>
+<td>Tanlangan annotatsiyani o'chirish</td>
+</tr>
+<tr>
+<td><strong>Enter</strong> (poly)</td>
+<td>Polygon yopish (≥3 nuqta kerak)</td>
+</tr>
+<tr>
+<td><strong>Esc</strong></td>
+<td>Tanlovni bekor / polygon chizishni bekor</td>
+</tr>
+<tr>
+<td><strong>Ctrl + C</strong></td>
+<td>Annotatsiya nusxasini olish</td>
+</tr>
+<tr>
+<td><strong>Ctrl + V</strong></td>
+<td>Annotatsiya qo'yish (boshqa DICOM'da ham)</td>
+</tr>
+<tr>
+<td><strong>?</strong></td>
+<td>Klaviatura yordami (alert oynasi)</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="4-dicom-ochish-va-korish">4. DICOM ochish va ko'rish</h2>
+<p><img class="shot" alt="03_dicom_viewer" src="screenshots/03_dicom_viewer.png" /></p>
+<h3 id="41-yuklash-usullari">4.1 Yuklash usullari</h3>
+<p><strong>A) Drag &amp; drop</strong>: DICOM faylini chap panel'ning yuqori qismiga torting.</p>
+<p><strong>B) "Fayl tanlash"</strong>: bir nechta <code>.dcm</code> faylni tanlash.</p>
+<p><strong>C) "Papka tanlash"</strong>: butun papkani yuklash (rekursiv).</p>
+<p><strong>D) Lokal</strong>: server diskidagi <code>LOCAL_DICOM_ROOT</code> ostidagi fayllar (yuklamasdan).</p>
+<h3 id="42-korishni-boshqarish">4.2 Ko'rishni boshqarish</h3>
+<table>
+<thead>
+<tr>
+<th>Harakat</th>
+<th>Qanday</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Pan</strong></td>
+<td>Sichqoncha bilan rasmni sudrang (Select rejimida)</td>
+</tr>
+<tr>
+<td><strong>Zoom</strong></td>
+<td>Mouse wheel yoki <strong>+ / -</strong> klaviatura</td>
+</tr>
+<tr>
+<td><strong>Pinch zoom</strong></td>
+<td>Telefon/planshet — ikki barmoq</td>
+</tr>
+<tr>
+<td><strong>W/L</strong></td>
+<td>Pastki slayderlar yoki raqamlarga klik</td>
+</tr>
+<tr>
+<td><strong>Frame</strong></td>
+<td>Multi-frame uchun <code>←/→</code> yoki Frame slayder</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="5-annotatsiya-jarayoni">5. Annotatsiya jarayoni</h2>
+<h3 id="51-bbox-tortburchak-chizish">5.1 BBox (to'rtburchak) chizish</h3>
+<ol>
+<li>Toolbar'dan label va BI-RADS tanlang (mas: <code>mass</code>, <code>4B</code>)</li>
+<li><strong>B</strong> bosing (yoki <code>▭ BBox</code>) → kursor crosshair</li>
+<li>Rasmda sichqoncha bilan to'rtburchak sudrab chizing</li>
+<li>Auto-save (1-2 soniya kechikishi bilan)</li>
+</ol>
+<h3 id="52-polygon-chizish">5.2 Polygon chizish</h3>
+<ol>
+<li><strong>P</strong> bosing (<code>⬢ Poly</code>)</li>
+<li>Rasmda <strong>bosib</strong> har bir nuqta qo'shing</li>
+<li><strong>Dblclick</strong> yoki <strong>Enter</strong> — polygon yopiladi</li>
+<li><strong>Esc</strong> — bekor qilish</li>
+</ol>
+<h3 id="53-annotatsiyani-tahrirlash">5.3 Annotatsiyani tahrirlash</h3>
+<ol>
+<li><strong>V</strong> bosing (<code>▶ Select</code>)</li>
+<li>Annotatsiyani tanlang (sichqoncha bilan bosish):</li>
+<li><strong>BBox</strong>: 8 ta tutqich (4 burchak + 4 chet) — sudrash bilan o'lchamini o'zgartiring</li>
+<li><strong>Polygon</strong>: oq nuqtalar (vertex) — sudrash bilan ko'chirish; <strong>right-click</strong> — vertex o'chirish; yashil nuqta (chet o'rtasi) — yangi vertex qo'shish</li>
+<li>Ann'ni o'rtasidan sudrab to'liq ko'chirish</li>
+<li><strong>Delete</strong> — o'chirish</li>
+</ol>
+<h3 id="54-status-flow-reviewer-workflow">5.4 Status flow (reviewer workflow)</h3>
+<pre><code>   ┌─────────┐   submit   ┌───────────┐   approve   ┌──────────┐
+   │  draft  │ ─────────&gt; │ submitted │ ──────────&gt; │ approved │
+   └────┬────┘    (S)     └─────┬─────┘     (Y)     └─────┬────┘
+        ▲ recall (R)            │ recall (R)              │
+        └───────────────────────┤                  reopen │
+                                │                         │
+                                │ reject (N)              │
+                                ▼ + sabab                 │
+                          ┌───────────┐                   │
+                          │ rejected  │                   │
+                          └─────┬─────┘                   │
+                                │ reopen                  │
+                                └─────────────────────────┘
+</code></pre>
+<table>
+<thead>
+<tr>
+<th>Rol</th>
+<th style="text-align: center;">draft → submitted</th>
+<th style="text-align: center;">submitted → approved/rejected</th>
+<th style="text-align: center;">own edit</th>
+<th style="text-align: center;">others' edit</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>annotator</td>
+<td style="text-align: center;">own only</td>
+<td style="text-align: center;">✗</td>
+<td style="text-align: center;">✓ (draft)</td>
+<td style="text-align: center;">✗</td>
+</tr>
+<tr>
+<td>reviewer</td>
+<td style="text-align: center;">✓</td>
+<td style="text-align: center;">✓</td>
+<td style="text-align: center;">✓</td>
+<td style="text-align: center;">✓</td>
+</tr>
+<tr>
+<td>admin</td>
+<td style="text-align: center;">✓</td>
+<td style="text-align: center;">✓</td>
+<td style="text-align: center;">✓</td>
+<td style="text-align: center;">✓</td>
+</tr>
+</tbody>
+</table>
+<p>Approved annotatsiya — annotator uchun read-only. Reviewer/admin reopen orqali draft'ga qaytaradi.</p>
+<h3 id="55-ong-panelda-annotatsiyalar">5.5 O'ng panelda annotatsiyalar</h3>
+<p><img class="shot" alt="05_annotations_tab" src="screenshots/05_annotations_tab.png" /></p>
+<p>Har bir annotatsiya:
+- <strong>Label dropdown</strong> — rangli ramka bilan
+- <strong>BI-RADS dropdown</strong>
+- <strong>Status pill</strong> — kulrang (draft) / sariq (submitted) / yashil (approved) / qizil (rejected)
+- <strong>Audit</strong>: kim yaratdi · oxirgi tahrirlash · reviewer
+- <strong>Status tugmalari</strong>: ▲ Submit / ✓ Approve / ✗ Reject / 🔓 Reopen / ▼ Recall
+- <strong>📜 Tarix</strong> — har bir o'zgarish jurnali
+- <strong>✕</strong> — o'chirish</p>
+<hr />
+<h2 id="6-hisobot-tab-xlsx-integratsiyasi">6. Hisobot tab (xlsx integratsiyasi)</h2>
+<p><img class="shot" alt="06_report_tab" src="screenshots/06_report_tab.png" /></p>
+<p>DICOM ochilganda — <code>Hisobot</code> tab avtomatik:</p>
+<ol>
+<li><strong>PatientID + Name + DOB</strong> orqali xlsx'dagi bemorga match qiladi</li>
+<li><strong>Avtomatik ishonch ≥80%</strong> bo'lsa — yozuvlarni darhol yuklaydi</li>
+<li><strong>Bir nechta nomzod</strong> bo'lsa — kart bilan tanlash uchun ko'rsatadi</li>
+<li><strong>Topilmasa</strong> — qo'lda qidirish maydoni</li>
+</ol>
+<p><strong>Bog'lash (manual):</strong> "🔗 Bog'lash" tugmasi — DICOM'ni shu bemorga doimiy bog'laydi. Keyingi safar avto-yuklanadi.</p>
+<p><strong>Bog'langan banner</strong>: yashil "🔗 Bog'langan · 85% · 2026-05-06". <code>🔓 Aloqani uzish</code> mavjud.</p>
+<p>Yozuvlar accordion ko'rinishida (sana bo'yicha):
+- Mammografiya hisoboti
+- Shikoyatlari, Anamnesis morbi
+- Klinik ko'rinish, Tashxis, Tavsiyalar
+- va h.k. (12 ta klinik bo'lim)</p>
+<hr />
+<h2 id="7-ai-tahlil">7. AI tahlil</h2>
+<h3 id="71-bitta-dicom-uchun">7.1 Bitta DICOM uchun</h3>
+<ol>
+<li>AI model dropdown'dan <code>.pt</code> faylni tanlang (masalan <code>digitaleye_yolo11_l.pt</code>)</li>
+<li><strong>🤖 AI tahlil</strong> bosing → 5-10 soniya kuting (CPU)</li>
+<li>Sariq punktir bbox'lar paydo bo'ladi (<code>🤖 mass 87%</code>)</li>
+<li>Slayder bilan threshold filtrlang (≥25% → ≥50% → ...)</li>
+<li>Variantlar:</li>
+<li>Bitta taklifni bosing → confirm bilan annotatsiyaga aylanadi</li>
+<li><strong>✓ Hammasini qabul</strong> — barcha ko'rinadigan takliflarni qabul qilish</li>
+<li><strong>✕</strong> — barchasini tozalash</li>
+</ol>
+<h3 id="72-batch-bir-nechta-dicom">7.2 Batch (bir nechta DICOM)</h3>
+<ol>
+<li>Chap panelda DICOM'lar yonida ☑ checkbox'larni belgilang</li>
+<li>Yuqorida <strong>🤖 AI batch</strong> tugmasi yonadi</li>
+<li>Bosing → confirm → max 50 DICOM'da AI yuguradi</li>
+<li>Natijalar <strong>avtomatik draft annotatsiya</strong> sifatida saqlanadi</li>
+<li>Reviewer keyinchalik approve/reject qiladi</li>
+</ol>
+<h3 id="73-modellar">7.3 Modellar</h3>
+<p><code>app/models/*.pt</code> papkasiga qo'ying. Tavsiya:
+- <strong>digitaleye_yolo11_l.pt</strong> (49MB) — KETEM mammografiya datasetida o'qitilgan
+- Yoki o'zingiz tayyorlagan YOLO modeli (Ultralytics-compatible)</p>
+<p>GPU bilan ishlatish uchun → <a href="GPU.md">GPU.md</a> (10-20x tezroq).</p>
+<hr />
+<h2 id="8-templates-qayta-ishlatiladigan-annotatsiyalar">8. Templates (qayta ishlatiladigan annotatsiyalar)</h2>
+<h3 id="81-saqlash">8.1 Saqlash</h3>
+<ol>
+<li>DICOM'da bir nechta tipik annotatsiya chizing (masalan, "BIRADS-4 standart joylar")</li>
+<li><strong>💾 Tpl</strong> bosing</li>
+<li>Nom + tavsif kiriting</li>
+<li>"Hammaga ko'rinsinmi?" — Yes (shared) yoki No (private)</li>
+</ol>
+<h3 id="82-qollash">8.2 Qo'llash</h3>
+<ol>
+<li>Yangi DICOM'ni oching</li>
+<li><strong>📑 Template</strong> dropdown'dan tanlang</li>
+<li>Annotatsiyalar joriy frame'ga qo'shiladi (<code>note += "[tpl: nom]"</code>)</li>
+<li>Avtomatik saqlanadi</li>
+</ol>
+<h3 id="83-clipboard-vaqtinchalik">8.3 Clipboard (vaqtinchalik)</h3>
+<ul>
+<li><strong>Ctrl+C</strong> — tanlangan / joriy frame'dagi barcha annotatsiyalarni clipboard'ga</li>
+<li><strong>Ctrl+V</strong> — boshqa DICOM'da ham qo'yish</li>
+<li>localStorage'da saqlanadi (tab/brauzer reload — saqlanadi)</li>
+</ul>
+<hr />
+<h2 id="9-pacs-integratsiyasi">9. PACS integratsiyasi</h2>
+<p><img class="shot" alt="10_pacs_modal" src="screenshots/10_pacs_modal.png" /></p>
+<h3 id="91-server-qoshish">9.1 Server qo'shish</h3>
+<ol>
+<li><strong>🏥 PACS</strong> modal</li>
+<li>Pastki formada: Nom + Host + Port + AET → "+ Qo'shish"</li>
+<li><strong>🩺 Echo</strong> — server bilan aloqa testi (C-ECHO)</li>
+</ol>
+<h3 id="92-bemor-qidirish-c-find">9.2 Bemor qidirish (C-FIND)</h3>
+<ol>
+<li>Server tanlang</li>
+<li>Patient ID / Name / Modality / Study Date kiriting</li>
+<li><strong>🔍 Qidirish</strong> → studies ro'yxati</li>
+<li>Har bir natija yonida <strong>→ Worklist</strong> — worklist'ga qo'shish</li>
+</ol>
+<h3 id="93-dicom-yuborish-c-store">9.3 DICOM yuborish (C-STORE)</h3>
+<p>DICOM ochiq bo'lganda:
+1. Toolbar'dan <strong>📤 PACS</strong> tugmasi
+2. Server tanlang (bir nechta bo'lsa)
+3. Confirm → DICOM PACS'ga yuboriladi</p>
+<h3 id="94-dicom-olish-c-move">9.4 DICOM olish (C-MOVE)</h3>
+<p>CLI orqali:</p>
+<pre><code class="language-cmd">.venv\Scripts\python.exe -m app.pacs fetch \
+  --host 192.168.1.10 --port 4242 --aet ORTHANC \
+  --study-uid 1.2.3.4 --dest ./fetched/
+</code></pre>
+<p>Yoki HTTP API: <code>POST /api/pacs/servers/{id}/fetch</code> body: <code>{"study_uid": "..."}</code>.</p>
+<hr />
+<h2 id="10-eksport-formatlari">10. Eksport formatlari</h2>
+<table>
+<thead>
+<tr>
+<th>Format</th>
+<th>Tugma</th>
+<th>Mazmuni</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>COCO JSON</strong></td>
+<td>⤓ Eksport</td>
+<td>Barcha annotatsiyalar (bbox + segmentation), bemor demografiyasi, audit fields</td>
+</tr>
+<tr>
+<td><strong>DICOM-SR</strong></td>
+<td>📄 SR</td>
+<td>Standart Structured Report — matnli annotatsiyalar (PACS-friendly)</td>
+</tr>
+<tr>
+<td><strong>DICOM-SEG</strong></td>
+<td>🖼 SEG</td>
+<td>Pixel-mask DICOM (segmentation)</td>
+</tr>
+<tr>
+<td><strong>De-ID DICOM</strong></td>
+<td>🛡 De-ID</td>
+<td>Anonimlashtirilgan asl DICOM (PHI tozalangan)</td>
+</tr>
+</tbody>
+</table>
+<h3 id="101-de-identification">10.1 De-identification</h3>
+<p>DICOM ochilganda <strong>🛡 De-ID</strong> bossangiz:
+1. PHI maydonlari ro'yxati (PatientName, ID, DOB, ReferringPhysician, va h.k.)
+2. <strong>⤓ Anonimlashtirilgan DICOM yuklab olish</strong>
+3. Tozalanadi: ism, ID → ANON; sana → 19000101; institution; physician
+4. Saqlanadi: yil komponenti (StudyDate 20260408 → 20260101)
+5. Pixel data o'zgarmaydi</p>
+<hr />
+<h2 id="11-notifications">11. Notifications (🔔)</h2>
+<p>Avto-tetiklayotgan hodisalar:</p>
+<table>
+<thead>
+<tr>
+<th>Hodisa</th>
+<th>Kim oladi</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Annotator submit qiladi</td>
+<td>Barcha reviewer + admin</td>
+</tr>
+<tr>
+<td>Reviewer approves</td>
+<td>Annotation egasi</td>
+</tr>
+<tr>
+<td>Reviewer rejects + sabab</td>
+<td>Annotation egasi</td>
+</tr>
+<tr>
+<td>Worklist tayinlash</td>
+<td>Tayinlangan user</td>
+</tr>
+</tbody>
+</table>
+<p>Bell tugmasini bossangiz dropdown ochiladi:
+- O'qilmaganlari ko'k chiziq bilan ajratilgan
+- Click → mark-read + tegishli DICOM ochiladi
+- "Hammasini o'qildi qilish"</p>
+<hr />
+<h2 id="12-admin-paneli">12. Admin paneli (👥)</h2>
+<p><img class="shot" alt="11_admin_modal" src="screenshots/11_admin_modal.png" /></p>
+<h3 id="121-foydalanuvchilar">12.1 Foydalanuvchilar</h3>
+<table>
+<thead>
+<tr>
+<th>Action</th>
+<th>Vazifa</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Role dropdown</td>
+<td>admin/reviewer/annotator (live save)</td>
+</tr>
+<tr>
+<td>Disable/Enable</td>
+<td>Faollikni o'zgartirish</td>
+</tr>
+<tr>
+<td>🔑 Reset</td>
+<td>Parolni o'zgartirish</td>
+</tr>
+<tr>
+<td>🗑</td>
+<td>O'chirish (faqat boshqa user'larni)</td>
+</tr>
+</tbody>
+</table>
+<h3 id="122-yangi-user-yaratish">12.2 Yangi user yaratish</h3>
+<p>Pastki forma: username + password + role + (display name + email opsional) → "+ Yaratish".</p>
+<h3 id="123-totp-majburiy-rollar">12.3 TOTP majburiy rollar</h3>
+<p>3 ta checkbox: admin / reviewer / annotator. Belgilangan rollar uchun keyingi login'da 2FA setup majburiy.</p>
+<h3 id="124-audit-log-csv">12.4 ⤓ Audit log CSV</h3>
+<p>Barcha <code>annotation_history</code> yozuvlarini CSV sifatida (UTF-8 BOM bilan, Excel'da to'g'ri ochiladi). Compliance/audit uchun.</p>
+<hr />
+<h2 id="13-statistika">13. Statistika (📊)</h2>
+<p><img class="shot" alt="07_stats_modal" src="screenshots/07_stats_modal.png" /></p>
+<p>Admin/reviewer uchun:</p>
+<ul>
+<li>8 ta umumiy ko'rsatkich (users, patients, annotations, AI-originated, va h.k.)</li>
+<li>Review davomiyligi: median, p90, mean (sekund)</li>
+<li>Bar chart'lar: status, top label'lar, top yaratuvchilar, worklist statuslar, audit action'lar</li>
+<li>Oxirgi 30 kun audit faolligi sparkline</li>
+</ul>
+<hr />
+<h2 id="14-audit-timeline">14. Audit timeline (📜)</h2>
+<p><img class="shot" alt="08_audit_modal" src="screenshots/08_audit_modal.png" /></p>
+<p>Admin/reviewer uchun:
+- Sana bo'yicha guruhlangan barcha hodisalar
+- Filter: username + action turi
+- Status transition'larida <code>prev → new</code> + sabab</p>
+<hr />
+<h2 id="15-annotated-dicoms-overview">15. Annotated DICOMs overview (🗂)</h2>
+<p><img class="shot" alt="09_overview_modal" src="screenshots/09_overview_modal.png" /></p>
+<p>Kart-ko'rinish:
+- Bemor ismi + DOB + ID
+- Annotatsiyalar soni + status pill'lar (draft/submitted/...)
+- Label distribution
+- Click → DICOM ochiladi</p>
+<p>Filter: status + "faqat meniki".</p>
+<hr />
+<h2 id="16-2fa-two-factor-authentication">16. 2FA (Two-Factor Authentication)</h2>
+<p><img class="shot" alt="12_totp_modal" src="screenshots/12_totp_modal.png" /></p>
+<h3 id="161-yoqish">16.1 Yoqish</h3>
+<ol>
+<li>Header'da <strong>🔓</strong> (yoki <strong>🔒</strong>) tugmasi</li>
+<li>QR kodni Google Authenticator / Authy / 1Password'da skanerlang</li>
+<li>App'dan 6-raqamli kodni kiriting</li>
+<li><strong>✓ Yoqish</strong> — ishga tushadi</li>
+</ol>
+<h3 id="162-login">16.2 Login</h3>
+<p>Username + parol + (agar enrolled bo'lsa) <strong>6-raqamli TOTP kod</strong>.</p>
+<h3 id="163-ochirish">16.3 O'chirish</h3>
+<p>🔒 modal → parol kiriting → "2FA ni o'chirish".</p>
+<h3 id="164-majburiy-enforcement">16.4 Majburiy enforcement</h3>
+<p>Admin <strong>👥</strong> modalda "TOTP majburiy rollar"'ni belgilasa, shu rolla kirgan userlar setup'gacha boshqa narsa qila olmaydi.</p>
+<hr />
+<h2 id="17-worklist">17. Worklist (📥)</h2>
+<p><img class="shot" alt="13_worklist" src="screenshots/13_worklist.png" /></p>
+<p>Ish navbati — DICOM tartibida ko'rib chiqish kerak bo'lganlar.</p>
+<h3 id="171-import">17.1 Import</h3>
+<p>CSV orqali:</p>
+<pre><code class="language-cmd">.venv\Scripts\python.exe -m app.import_worklist worklist.csv --reset
+</code></pre>
+<p>DICOM MWL serverdan:</p>
+<pre><code class="language-cmd">pip install pynetdicom
+.venv\Scripts\python.exe -m app.mwl_scu --host 192.168.1.10 --port 4242 \
+  --aet ORTHANC --modality MG --date today
+</code></pre>
+<p>PACS query natijalaridan: <code>→ Worklist</code> tugmasi (PACS modal'dan).</p>
+<h3 id="172-boshqarish">17.2 Boshqarish</h3>
+<ul>
+<li><strong>Filter</strong>: status + "faqat meniki"</li>
+<li><strong>Right-click</strong> (admin/reviewer) → assign / priority / status o'zgartirish</li>
+<li><strong>Click</strong> → bemor overview modal</li>
+</ul>
+<hr />
+<h2 id="18-websocket-real-time-hamkorlik">18. WebSocket — real-time hamkorlik</h2>
+<p>DICOM ochilganda:
+- Boshqa user'lar real-time'da ko'rinadi (yashil <strong>● user1, user2</strong> pill toolbar'da)
+- Boshqa user kursori — rangli doira + ism rasmda
+- Annotatsiya qo'shilsa/o'zgarsa — barcha ko'ruvchilarda avto-yangilanadi</p>
+<hr />
+<h2 id="19-cli-komandalari-toplami">19. CLI komandalari to'plami</h2>
+<pre><code class="language-cmd">:: Foydalanuvchilar
+.venv\Scripts\python.exe -m app.manage_users list
+.venv\Scripts\python.exe -m app.manage_users create alice --role annotator
+.venv\Scripts\python.exe -m app.manage_users passwd alice
+.venv\Scripts\python.exe -m app.manage_users rotate-secret
+
+:: xlsx import
+.venv\Scripts\python.exe -m app.import_xlsx --reset
+
+:: Worklist import (CSV)
+.venv\Scripts\python.exe -m app.import_worklist --reset
+
+:: Worklist import (DICOM MWL)
+.venv\Scripts\python.exe -m app.mwl_scu --host ... --port ... --aet ...
+
+:: PACS
+.venv\Scripts\python.exe -m app.pacs send --host ... file.dcm
+.venv\Scripts\python.exe -m app.pacs query --host ... --patient-id 12345
+.venv\Scripts\python.exe -m app.pacs fetch --host ... --study-uid 1.2.3 --dest ./out/
+
+:: Backup
+.venv\Scripts\python.exe -m app.backup list
+.venv\Scripts\python.exe -m app.backup create [output.tar.gz]
+.venv\Scripts\python.exe -m app.backup restore backup.tar.gz [--force]
+</code></pre>
+<hr />
+<h2 id="20-mobile-telefonplanshet">20. Mobile (telefon/planshet)</h2>
+<p>Layout 768px'da o'zgaradi:
+- Sidebar va meta-pane yashirinadi (toggle: ☰ va 📋)
+- Pinch-to-zoom (ikki barmoq)
+- Tugmalar 32px+ (touch-friendly)</p>
+<hr />
+<h2 id="21-tipik-ish-jarayonlari">21. Tipik ish jarayonlari</h2>
+<h3 id="annotator-radiolog-stajori">Annotator (radiolog stajori)</h3>
+<p><img class="shot" alt="14_dashboard" src="screenshots/14_dashboard.png" /></p>
+<ol>
+<li>Login</li>
+<li><strong>📥 Worklist</strong> → o'ziga tayinlangan ishlar</li>
+<li>DICOM ochiladi → annotatsiyalar chizadi</li>
+<li><strong>S</strong> (Submit) bosadi</li>
+<li>Reviewer reject qilsa <strong>🔔</strong> kelinadi → tuzatadi → qayta submit</li>
+</ol>
+<h3 id="reviewer-katta-radiolog">Reviewer (katta radiolog)</h3>
+<ol>
+<li>Login</li>
+<li><strong>🔔</strong> dan submit notification → DICOM ochadi</li>
+<li>Annotatsiyani ko'rib chiqib <strong>Y</strong> (Approve) yoki <strong>N</strong> (Reject + sabab)</li>
+<li><strong>🗂 Overview</strong> dan keyingi DICOM tanlaydi</li>
+<li>Statistikani <strong>📊</strong> dan ko'radi</li>
+</ol>
+<h3 id="admin">Admin</h3>
+<ol>
+<li><strong>👥</strong> dan yangi user yaratadi</li>
+<li><strong>🏥 PACS</strong> sozlaydi</li>
+<li><strong>📜 Audit timeline</strong> dan jamoa faoliyatini kuzatadi</li>
+<li><strong>⤓ Audit log CSV</strong> — compliance hisobotlari uchun</li>
+<li><strong>TOTP majburiy</strong> rollar belgilaydi</li>
+<li>Backup: <code>python -m app.backup create</code> haftalik</li>
+</ol>
+<hr />
+<h2 id="22-tez-tez-beriladigan-savollar">22. Tez-tez beriladigan savollar</h2>
+<p><strong>S: Brauzerda qora ekran ko'rinmoqda, login modal yo'q.</strong>
+J: <code>Ctrl+F5</code> bilan hard refresh qiling. Kesh muammosi bo'lishi mumkin.</p>
+<p><strong>S: AI tahlil ishlamayapti.</strong>
+J: 1) <code>app/models/*.pt</code> faylini qo'ying. 2) <code>requirements.txt</code>'da <code>ultralytics</code> o'rnatilgan bo'lishi kerak.</p>
+<p><strong>S: PACS ga ulanishda 503/502 xato.</strong>
+J: PACS server ishga tushganmi? <code>app.pacs --help</code> orqali testlang.</p>
+<p><strong>S: DICOM-SEG eksport "FrameOfReferenceUID yo'q" deydi.</strong>
+J: Mammografiya'da bu normal. Avto-fallback bilan barcha label'lar bitta segmentga birlashtiriladi.</p>
+<p><strong>S: 2FA QR kodini skanerlay olmadim.</strong>
+J: Secret string'ni qo'lda kiriting (Authenticator app'da "Manual entry").</p>
+<p><strong>S: Worklist'ga qanday qo'shaman?</strong>
+J: CSV import yoki PACS C-FIND natijalaridan <code>→ Worklist</code> tugmasi.</p>
+<p><strong>S: Server qaerga uploads va annotations saqlaydi?</strong>
+J: <code>app/uploads/</code> (DICOM), <code>app/annotations/</code> (JSON), <code>app/db.sqlite3</code> (DB).</p>
+<p><strong>S: Sessiya qancha vaqt davom etadi?</strong>
+J: JWT token 12 soat amal qiladi. Keyin qayta kirish kerak.</p>
+<p><strong>S: Production'ga qanday joylashtiraman?</strong>
+J: <a href="DEPLOY.md">DEPLOY.md</a> — Docker Compose + Caddy bilan HTTPS.</p>
+<hr />
+<h2 id="23-texnik-malumotlar">23. Texnik ma'lumotlar</h2>
+<table>
+<thead>
+<tr>
+<th></th>
+<th></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Backend</td>
+<td>FastAPI (Python 3.12)</td>
+</tr>
+<tr>
+<td>DB</td>
+<td>SQLite (<code>app/db.sqlite3</code>)</td>
+</tr>
+<tr>
+<td>Frontend</td>
+<td>Vanilla JS + SVG</td>
+</tr>
+<tr>
+<td>Auth</td>
+<td>JWT (HS256, 12h TTL) + bcrypt</td>
+</tr>
+<tr>
+<td>2FA</td>
+<td>TOTP (RFC 6238, 6 raqam)</td>
+</tr>
+<tr>
+<td>AI</td>
+<td>YOLO via Ultralytics</td>
+</tr>
+<tr>
+<td>WebSocket</td>
+<td>FastAPI native, room-based</td>
+</tr>
+<tr>
+<td>Eksport</td>
+<td>COCO, DICOM-SR, DICOM-SEG (highdicom)</td>
+</tr>
+<tr>
+<td>DICOM tarmoq</td>
+<td>pynetdicom (C-STORE/FIND/MOVE/MWL)</td>
+</tr>
+<tr>
+<td>Rate limit</td>
+<td>slowapi (login 10/min, AI 20/min)</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="24-yordam">24. Yordam</h2>
+<ul>
+<li><strong>?</strong> klaviatura → tezkor hotkey ro'yxati</li>
+<li>Loyiha hujjatlari:</li>
+<li><a href="GPU.md">GPU.md</a> — CUDA setup</li>
+<li><a href="DEPLOY.md">DEPLOY.md</a> — Docker production</li>
+<li>Server log: <code>uvicorn</code> chiqishida xatolar</li>
+<li>Brauzer xatolari: F12 → Console</li>
+</ul>
+</body>
+</html>
