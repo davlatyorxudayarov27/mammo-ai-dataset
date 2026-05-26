@@ -707,20 +707,107 @@ async function loadAiStatus() {
     o.textContent = m.stem;
     sel.appendChild(o);
   }
+  // Ensemble (Weighted Boxes Fusion of all models) — only meaningful with ≥2 models.
+  if (state.aiModels.length >= 2) {
+    const o = document.createElement('option');
+    o.value = '__ensemble__';
+    o.textContent = '🧬 Ensemble (barcha modellar · WBF)';
+    sel.appendChild(o);
+  }
   if (state.aiAvailable) {
     sel.hidden = false;
     $('aiRunBtn').hidden = false;
     $('aiThresholdWrap').hidden = false;
+    $('aiTtaWrap').hidden = false;
     $('aiRunBtn').title = `AI tahlil (${state.aiDevice})`;
   } else if (state.aiInstalled) {
     setStatus(`AI tayyor, lekin model topilmadi (app/models/*.pt qo'shing)`);
   }
 }
 
+function closeAllMultiSelects() {
+  document.querySelectorAll('.ms .ms-panel').forEach(p => { p.hidden = true; });
+}
+document.addEventListener('click', closeAllMultiSelects);
+
+// Reusable checkbox dropdown for picking one OR several labels.
+// opts: { selected: string[], onChange(arr), compact?: bool, placeholder?: string }
+function buildLabelMultiSelect(opts) {
+  const host = document.createElement('span');
+  host.className = 'ms' + (opts.compact ? ' ms-compact' : '');
+  let selected = [...(opts.selected || [])];
+
+  const toggle = document.createElement('button');
+  toggle.type = 'button';
+  toggle.className = 'ms-toggle';
+
+  const panel = document.createElement('div');
+  panel.className = 'ms-panel';
+  panel.hidden = true;
+
+  function renderToggle() {
+    if (selected.length === 0) {
+      toggle.textContent = opts.placeholder || 'Label tanlang';
+      toggle.classList.remove('has-sel');
+    } else {
+      toggle.textContent = selected.join(', ');
+      toggle.classList.add('has-sel');
+    }
+    toggle.title = toggle.textContent;
+  }
+
+  function buildOptions() {
+    panel.innerHTML = '';
+    for (const l of state.labels) {
+      const opt = document.createElement('label');
+      opt.className = 'ms-opt';
+      const cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.checked = selected.includes(l.name);
+      const dot = document.createElement('span');
+      dot.className = 'ms-dot';
+      dot.style.background = l.color;
+      const name = document.createElement('span');
+      name.className = 'ms-name';
+      name.textContent = l.name;
+      opt.appendChild(cb); opt.appendChild(dot); opt.appendChild(name);
+      cb.addEventListener('change', () => {
+        if (cb.checked) {
+          if (!selected.includes(l.name)) selected.push(l.name);
+        } else {
+          selected = selected.filter(x => x !== l.name);
+        }
+        renderToggle();
+        if (opts.onChange) opts.onChange([...selected]);
+      });
+      opt.addEventListener('click', e => e.stopPropagation());
+      panel.appendChild(opt);
+    }
+  }
+
+  toggle.addEventListener('click', e => {
+    e.stopPropagation();
+    const willOpen = panel.hidden;
+    closeAllMultiSelects();
+    if (willOpen) { buildOptions(); panel.hidden = false; }
+  });
+
+  host._msSet = (arr) => { selected = [...(arr || [])]; renderToggle(); };
+  host._msGet = () => [...selected];
+
+  renderToggle();
+  host.appendChild(toggle);
+  host.appendChild(panel);
+  return host;
+}
+
 async function loadLabels() {
   const data = await apiJson('/api/labels');
   state.labels = data.labels || [];
   state.birads = data.birads || [];
+
+  // Toolbar keeps the classic single <select> (one label for the next new
+  // annotation). Multiple labels are added per-annotation in the right panel.
   const sel = $('labelSelect');
   sel.innerHTML = '';
   for (const l of state.labels) {
@@ -729,6 +816,7 @@ async function loadLabels() {
     o.style.color = l.color;
     sel.appendChild(o);
   }
+
   const bsel = $('biradsSelect');
   for (const b of state.birads) {
     const o = document.createElement('option');
@@ -862,7 +950,8 @@ document.addEventListener('click', async (e) => {
     const r = await apiJson('/api/inference/batch', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ items, model, conf: state.aiThreshold || 0.25, auto_save: true }),
+      body: JSON.stringify({ items, model, conf: state.aiThreshold || 0.25, auto_save: true,
+                              tta: !!($('aiTtaToggle') && $('aiTtaToggle').checked) }),
     });
     const ok = r.results.filter(x => x.ok).length;
     const det = r.results.reduce((s, x) => s + (x.detections || 0), 0);
@@ -884,6 +973,11 @@ async function onItemClick(it, li) {
 }
 
 async function openItem(it) {
+  // Safety net: persist unsaved work before leaving the current image so
+  // manual-save mode never silently loses annotations on navigation.
+  if (state.dirty && state.current) {
+    try { await saveAnnotations(); } catch (e) { /* keep navigating */ }
+  }
   setStatus("o'qilmoqda…");
   state.current = { kind: it.kind, id: it.id, path: it.path };
   state.frame = 0;
@@ -913,11 +1007,17 @@ async function openItem(it) {
   configureWlSliders(meta);
 
   await loadAnnotations();
+  state.dirty = false;
+  setSaveStatus('', '');
+  updateSaveBtn();
   loadReport().catch(() => {});
   await loadImage(true);
   $('deidBtn').hidden = false;
   $('srBtn').hidden = false;
   $('segBtn').hidden = false;
+  $('maskPngBtn').hidden = false;
+  $('maskNiftiBtn').hidden = false;
+  $('radiomicsBtn').hidden = false;
   $('cStoreBtn').hidden = false;
   $('tplSelect').hidden = false;
   $('tplSaveBtn').hidden = false;
@@ -1346,7 +1446,32 @@ function normalizeAnn(a) {
   if (!out.id) out.id = uid();
   if (!out.bbox) out.bbox = [0, 0, 0, 0];
   if (typeof out.frame !== 'number') out.frame = 0;
+  // Multi-label support: `labels` is the source of truth, `label` stays as the
+  // primary (first) label for backward compatibility (color, export, stats).
+  if (Array.isArray(out.labels) && out.labels.length) {
+    out.label = out.labels[0];
+  } else {
+    out.labels = out.label ? [out.label] : [];
+  }
   return out;
+}
+
+// Read the primary + full label set for an annotation, tolerating old records.
+function annLabels(a) {
+  if (Array.isArray(a.labels) && a.labels.length) return a.labels;
+  return a.label ? [a.label] : [];
+}
+function annLabelText(a) {
+  const ls = annLabels(a);
+  return ls.length ? ls.join(' + ') : '—';
+}
+
+// Primary label chosen in the toolbar for a new annotation (always one).
+// Extra labels are added afterwards via the per-annotation editor.
+function pendingLabels() {
+  const sel = $('labelSelect');
+  const v = sel ? sel.value : '';
+  return v ? [v] : [state.labels[0]?.name || 'mass'];
 }
 
 function parseFirstNumber(v) {
@@ -1438,6 +1563,9 @@ function clearViewer() {
   $('deidBtn').hidden = true;
   $('srBtn').hidden = true;
   $('segBtn').hidden = true;
+  $('maskPngBtn').hidden = true;
+  $('maskNiftiBtn').hidden = true;
+  $('radiomicsBtn').hidden = true;
   $('cStoreBtn').hidden = true;
   $('tplSelect').hidden = true;
   $('tplSaveBtn').hidden = true;
@@ -3097,6 +3225,37 @@ async function downloadDicomExport(kind, suffix, label) {
 $('srBtn').addEventListener('click', () => downloadDicomExport('dicom-sr', 'sr', 'DICOM-SR'));
 $('segBtn').addEventListener('click', () => downloadDicomExport('dicom-seg', 'seg', 'DICOM-SEG'));
 
+async function downloadMaskExport(format, ext, label) {
+  if (!state.current) return;
+  const tok = getToken();
+  setStatus(`${label} yaratilmoqda…`);
+  const res = await fetch(
+    `/api/export/mask?source=${refSource()}&ref=${encodeURIComponent(refValue())}&format=${format}`,
+    { headers: { 'Authorization': `Bearer ${tok}` } },
+  );
+  if (!res.ok) {
+    if (res.status === 404) alert("Annotatsiyalar yo'q — avval annotatsiya qiling");
+    else if (res.status === 422) alert('Rasm o\'lchamlari noma\'lum — maska yaratib bo\'lmadi');
+    else alert(`${label} xato: ` + res.status);
+    setStatus('');
+    return;
+  }
+  const legend = res.headers.get('X-Mask-Legend');
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  const stem = (refValue() || 'anon').split('/').pop().replace(/\.dcm$/i, '');
+  a.download = `${stem}_${ext}`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+  setStatus(`${label} yuklab olindi${legend ? ' · legend: ' + legend : ''}`);
+}
+$('maskPngBtn').addEventListener('click', () => downloadMaskExport('png', 'mask.png', 'Mask PNG'));
+$('maskNiftiBtn').addEventListener('click', () => downloadMaskExport('nifti', 'mask.nii.gz', 'Mask NIfTI'));
+
 (function bindLinksUi() {
   const inp = $('linksSearch');
   let timer = null;
@@ -3308,7 +3467,8 @@ function finalizePolyDraw() {
     cancelPolyDraw();
     return;
   }
-  const label = $('labelSelect').value || (state.labels[0]?.name || 'mass');
+  const labels = pendingLabels();
+  const label = labels[0];
   const birads = $('biradsSelect').value || '';
   const pts = polyDraw.points.map(p => [clamp01(p[0]), clamp01(p[1])]);
   const xs = pts.map(p => p[0]);
@@ -3319,6 +3479,7 @@ function finalizePolyDraw() {
     id: uid(),
     type: 'polygon',
     label,
+    labels,
     bi_rads: birads,
     note: '',
     frame: state.frame,
@@ -3407,12 +3568,14 @@ function onPolyDblClick(e) {
 })();
 
 function addBox(x, y, w, h) {
-  const label = $('labelSelect').value || (state.labels[0] && state.labels[0].name) || 'unlabeled';
+  const labels = pendingLabels();
+  const label = labels[0];
   const birads = $('biradsSelect').value || '';
   const ann = {
     id: uid(),
     type: 'bbox',
     label,
+    labels,
     bi_rads: birads,
     note: '',
     frame: state.frame,
@@ -3439,12 +3602,13 @@ function deleteAnn(id) {
   scheduleAutosave();
 }
 
-function updateAnn(id, patch) {
+function updateAnn(id, patch, opts = {}) {
   const a = state.annotations.find(x => x.id === id);
   if (!a) return;
   Object.assign(a, patch);
   a.updated_at = new Date().toISOString();
-  renderSvg(); renderAnnoList();
+  renderSvg();
+  if (!opts.skipList) renderAnnoList();
   scheduleAutosave();
 }
 
@@ -3496,7 +3660,7 @@ function renderSvg() {
       x: labelX, y: labelY,
       'font-size': fontSize,
     });
-    txt.textContent = a.label + (a.bi_rads ? ` · BI-RADS ${a.bi_rads}` : '');
+    txt.textContent = annLabelText(a) + (a.bi_rads ? ` · BI-RADS ${a.bi_rads}` : '');
     svg.appendChild(txt);
   }
 
@@ -3844,15 +4008,19 @@ function renderAnnoList() {
     const info = document.createElement('div');
     info.className = 'info';
 
-    const labelSel = document.createElement('select');
-    for (const l of state.labels) {
-      const o = document.createElement('option');
-      o.value = l.name; o.textContent = l.name;
-      if (l.name === a.label) o.selected = true;
-      labelSel.appendChild(o);
-    }
+    const labelSel = buildLabelMultiSelect({
+      selected: annLabels(a),
+      compact: true,
+      placeholder: 'Label',
+      onChange: (arr) => {
+        const labels = arr.length ? arr : [];
+        // skipList: keep the dropdown open so several labels can be toggled in a row;
+        // refresh the swatch + canvas in place instead of rebuilding the whole list.
+        updateAnn(a.id, { labels, label: labels[0] || '' }, { skipList: true });
+        sw.style.background = colorFor(labels[0]);
+      },
+    });
     labelSel.addEventListener('click', e => e.stopPropagation());
-    labelSel.addEventListener('change', e => updateAnn(a.id, { label: e.target.value }));
 
     const biSel = document.createElement('select');
     const empty = document.createElement('option');
@@ -3917,6 +4085,7 @@ function renderAnnoList() {
       }
     }
     sa.appendChild(makeStatusBtn('📜 Tarix', 'history', () => showHistoryFor(a.id)));
+    sa.appendChild(makeStatusBtn('📊 Radiomika', 'history', () => showRadiomicsFor(a.id)));
     info.appendChild(sa);
 
     const meta = document.createElement('div');
@@ -3945,16 +4114,23 @@ function renderAnnoList() {
 }
 
 let _saveTimer = null;
+// Manual-save mode: drawing/editing only marks the work as unsaved.
+// The user persists explicitly via the 💾 Saqlash button (or Ctrl+S).
 function scheduleAutosave() {
   state.dirty = true;
-  setSaveStatus('dirty', '*');
-  clearTimeout(_saveTimer);
-  _saveTimer = setTimeout(saveAnnotations, 500);
+  setSaveStatus('dirty', '● saqlanmagan');
+  updateSaveBtn();
 }
 function setSaveStatus(cls, text) {
   const node = $('saveStatus');
   node.className = 'save-status ' + (cls || '');
   node.textContent = text || '';
+}
+function updateSaveBtn() {
+  const b = $('saveBtn');
+  if (!b) return;
+  b.disabled = !(state.dirty && state.current);
+  b.classList.toggle('pending', !!state.dirty);
 }
 
 function makeStatusBtn(text, cls, onClick) {
@@ -4084,6 +4260,136 @@ function annotationDiffSummary(prev, next) {
 }
 
 $('historyCloseBtn').addEventListener('click', () => { $('historyModal').hidden = true; });
+$('radiomicsCloseBtn').addEventListener('click', () => { $('radiomicsModal').hidden = true; });
+
+// Toolbar button: radiomics for the selected annotation (or the only one).
+$('radiomicsBtn').addEventListener('click', () => {
+  const visible = state.annotations.filter(a => a.frame === state.frame);
+  if (!visible.length) {
+    alert("Bu kadrda annotatsiya yo'q. Avval BBox yoki Poly bilan ROI chizing.");
+    return;
+  }
+  let id = state.selectedId;
+  if (!id || !visible.some(a => a.id === id)) {
+    if (visible.length === 1) id = visible[0].id;
+    else { alert("Avval annotatsiyani tanlang (ro'yxatdan yoki rasm ustida bosib)."); return; }
+  }
+  showRadiomicsFor(id);
+});
+
+const RADIOMICS_FAMILIES = [
+  ['shape', 'Shakl (2D morfologiya)'],
+  ['first_order', 'First-order (intensivlik)'],
+  ['glcm', 'GLCM (tekstura — co-occurrence)'],
+  ['glrlm', 'GLRLM (run-length)'],
+  ['glszm', 'GLSZM (size-zone)'],
+  ['ngtdm', 'NGTDM (neighbouring tone)'],
+];
+
+function fmtFeature(v) {
+  if (typeof v !== 'number' || !isFinite(v)) return String(v);
+  if (v !== 0 && (Math.abs(v) >= 1e4 || Math.abs(v) < 1e-3)) return v.toExponential(3);
+  return v.toFixed(4);
+}
+
+async function showRadiomicsFor(annotationId, bins) {
+  if (!state.current) return;
+  // Radiomics runs on the saved copy; persist first in manual-save mode.
+  if (state.dirty) { try { await saveAnnotations(); } catch (e) { /* try anyway */ } }
+  bins = bins || 32;
+  const body = $('radiomicsBody');
+  body.innerHTML = '<div class="report-empty">Hisoblanmoqda…</div>';
+  $('radiomicsModal').hidden = false;
+  try {
+    const res = await fetch(
+      `/api/radiomics?source=${refSource()}&ref=${encodeURIComponent(refValue())}` +
+      `&annotation_id=${encodeURIComponent(annotationId)}&bins=${bins}`,
+      { headers: { 'Authorization': `Bearer ${getToken()}` } },
+    );
+    if (!res.ok) {
+      const hint = res.status === 404 ? " (avval annotatsiyani saqlang)" :
+                   res.status === 422 ? " (ROI yoki rasm o'lchami yaroqsiz)" : '';
+      body.innerHTML = `<div class="report-empty">Xato: ${res.status}${hint}</div>`;
+      return;
+    }
+    renderRadiomics(body, await res.json(), annotationId);
+  } catch (e) {
+    body.innerHTML = `<div class="report-empty">Tarmoq xatosi: ${e.message}</div>`;
+  }
+}
+
+function renderRadiomics(body, data, annotationId) {
+  const item = (data.results || [])[0];
+  body.innerHTML = '';
+  if (!item) { body.innerHTML = '<div class="report-empty">Natija yo\'q.</div>'; return; }
+
+  const ctl = document.createElement('div');
+  ctl.className = 'radiomics-controls';
+  const info = document.createElement('div');
+  info.className = 'radiomics-info';
+  const sp = item.spacing_mm ? `${item.spacing_mm.map(s => s.toFixed(3)).join('×')} mm/px`
+                              : "piksel o'lchami yo'q — birliklar px";
+  info.innerHTML = `Label: <b>${(item.labels || [item.label]).join(' + ')}</b> · ` +
+                   `tur: ${item.type} · ${sp} · bins: ${data.bins}`;
+  ctl.appendChild(info);
+
+  const binSel = document.createElement('select');
+  for (const b of [16, 32, 64, 128]) {
+    const o = document.createElement('option');
+    o.value = b; o.textContent = `${b} bins`;
+    if (b === data.bins) o.selected = true;
+    binSel.appendChild(o);
+  }
+  binSel.title = 'Tekstura uchun intensivlik darajalari soni';
+  binSel.addEventListener('change', () => showRadiomicsFor(annotationId, parseInt(binSel.value, 10)));
+  ctl.appendChild(binSel);
+
+  const csvBtn = document.createElement('button');
+  csvBtn.textContent = '⤓ CSV (barcha ROI)';
+  csvBtn.title = 'Shu rasmdagi barcha annotatsiyalar radiomikasini CSV qilib yuklash';
+  csvBtn.addEventListener('click', () => downloadRadiomicsCsv(data.bins));
+  ctl.appendChild(csvBtn);
+  body.appendChild(ctl);
+
+  for (const [fam, title] of RADIOMICS_FAMILIES) {
+    const feats = item.features[fam];
+    if (!feats) continue;
+    const h = document.createElement('div');
+    h.className = 'report-section-title';
+    h.textContent = `${title} · ${Object.keys(feats).length}`;
+    body.appendChild(h);
+    const tbl = document.createElement('table');
+    tbl.className = 'radiomics-table';
+    for (const [k, v] of Object.entries(feats)) {
+      const tr = document.createElement('tr');
+      const td1 = document.createElement('td'); td1.textContent = k;
+      const td2 = document.createElement('td'); td2.className = 'val'; td2.textContent = fmtFeature(v);
+      tr.appendChild(td1); tr.appendChild(td2);
+      tbl.appendChild(tr);
+    }
+    body.appendChild(tbl);
+  }
+}
+
+async function downloadRadiomicsCsv(bins) {
+  try {
+    const res = await fetch(
+      `/api/radiomics/csv?source=${refSource()}&ref=${encodeURIComponent(refValue())}&bins=${bins || 32}`,
+      { headers: { 'Authorization': `Bearer ${getToken()}` } },
+    );
+    if (!res.ok) { alert('CSV xato: ' + res.status); return; }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    const stem = (refValue() || 'anon').split('/').pop().replace(/\.dcm$/i, '');
+    a.download = `${stem}_radiomics.csv`;
+    document.body.appendChild(a); a.click(); a.remove();
+    URL.revokeObjectURL(url);
+  } catch (e) {
+    alert('CSV xato: ' + e.message);
+  }
+}
 
 async function saveAnnotations() {
   if (!state.current) return;
@@ -4107,11 +4413,13 @@ async function saveAnnotations() {
       body: JSON.stringify(body),
     });
     state.dirty = false;
-    setSaveStatus('saved', 'saqlandi');
+    setSaveStatus('saved', '✓ saqlandi');
+    updateSaveBtn();
     setTimeout(() => { if (!state.dirty) setSaveStatus('', ''); }, 1500);
     refreshActiveList();
   } catch (e) {
     setSaveStatus('err', 'xato!');
+    updateSaveBtn();
   } finally {
     state.saving = false;
   }
@@ -4137,6 +4445,7 @@ async function runInference() {
       imgsz: 1024,
       wc: state.wc,
       ww: state.ww,
+      tta: !!($('aiTtaToggle') && $('aiTtaToggle').checked),
     };
     const res = await apiJson('/api/inference/run', {
       method: 'POST',
@@ -4189,6 +4498,7 @@ function acceptAllSuggestions() {
       id: uid(),
       type: 'bbox',
       label,
+      labels: [label],
       bi_rads: '',
       note: `AI: ${s.label} ${(s.confidence * 100).toFixed(1)}%`,
       frame: state.frame,
@@ -4223,6 +4533,7 @@ function onSuggestionClick(e, s) {
     id: uid(),
     type: 'bbox',
     label,
+    labels: [label],
     bi_rads: '',
     note: `AI: ${s.label} ${(s.confidence * 100).toFixed(1)}%`,
     frame: state.frame,
@@ -4248,13 +4559,29 @@ $('aiConfSlider').addEventListener('input', (e) => {
   applyAiThreshold();
 });
 
-$('exportBtn').addEventListener('click', () => {
+function downloadDatasetExport(fmt) {
   const a = document.createElement('a');
-  a.href = '/api/export?format=coco';
+  a.href = `/api/export?format=${encodeURIComponent(fmt)}`;
   a.download = '';
   document.body.appendChild(a);
   a.click();
   a.remove();
+}
+$('exportBtn').addEventListener('click', () => downloadDatasetExport('coco'));
+$('exportYoloBtn').addEventListener('click', () => downloadDatasetExport('yolo'));
+$('exportVocBtn').addEventListener('click', () => downloadDatasetExport('voc'));
+$('exportCsvBtn').addEventListener('click', () => downloadDatasetExport('csv'));
+
+// Manual save: button + Ctrl/Cmd+S, with an unsaved-changes guard on unload.
+$('saveBtn').addEventListener('click', () => { if (state.dirty) saveAnnotations(); });
+window.addEventListener('keydown', (e) => {
+  if ((e.ctrlKey || e.metaKey) && (e.key === 's' || e.key === 'S')) {
+    e.preventDefault();
+    if (state.dirty) saveAnnotations();
+  }
+});
+window.addEventListener('beforeunload', (e) => {
+  if (state.dirty) { e.preventDefault(); e.returnValue = ''; }
 });
 
 function _zoomBy(factor) {

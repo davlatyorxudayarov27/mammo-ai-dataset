@@ -291,6 +291,23 @@ button {
 button:hover { border-color: var(--accent); }
 button:disabled { opacity: 0.5; cursor: not-allowed; }
 button.tool.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+
+/* Manual save button: highlighted while there are unsaved changes. */
+#saveBtn.pending {
+  border-color: var(--warn);
+  color: var(--warn);
+  font-weight: 600;
+}
+#saveBtn:disabled { opacity: 0.5; cursor: default; }
+
+/* Radiomics modal */
+.radiomics-controls { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 10px; }
+.radiomics-info { flex: 1; min-width: 180px; font-size: 12px; color: var(--muted); }
+.radiomics-info b { color: var(--text); }
+.radiomics-table { width: 100%; border-collapse: collapse; margin: 2px 0 10px; font-size: 12px; }
+.radiomics-table td { padding: 3px 8px; border-bottom: 1px solid var(--border); }
+.radiomics-table td.val { text-align: right; font-variant-numeric: tabular-nums; color: var(--text); }
+.radiomics-table td:first-child { color: var(--muted); }
 button#invertBtn.active { background: var(--accent); border-color: var(--accent); color: #fff; }
 
 select {
@@ -301,6 +318,71 @@ select {
   border-radius: 4px;
   font-size: 12px;
 }
+
+/* --- Multi-select label dropdown --- */
+.ms { position: relative; display: inline-block; vertical-align: middle; }
+.ms .ms-toggle {
+  background: var(--panel-2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  padding: 5px 22px 5px 8px;
+  border-radius: 4px;
+  font-size: 12px;
+  cursor: pointer;
+  min-width: 90px;
+  max-width: 220px;
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  position: relative;
+}
+.ms .ms-toggle::after {
+  content: "▾";
+  position: absolute;
+  right: 7px; top: 50%;
+  transform: translateY(-50%);
+  color: var(--muted);
+  font-size: 10px;
+}
+.ms .ms-toggle.has-sel { border-color: var(--accent); }
+.ms .ms-panel {
+  position: absolute;
+  z-index: 60;
+  top: calc(100% + 4px);
+  left: 0;
+  min-width: 180px;
+  max-height: 280px;
+  overflow-y: auto;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.45);
+  padding: 4px;
+}
+.ms .ms-panel[hidden] { display: none; }
+.ms .ms-opt {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--text);
+  user-select: none;
+}
+.ms .ms-opt:hover { background: var(--panel-2); }
+.ms .ms-opt input { margin: 0; accent-color: var(--accent); cursor: pointer; }
+.ms .ms-opt .ms-dot {
+  width: 10px; height: 10px; border-radius: 2px; flex-shrink: 0;
+  border: 1px solid rgba(0,0,0,0.4);
+}
+.ms .ms-opt .ms-name { flex: 1; }
+/* Compact variant used inside annotation rows */
+.ms.ms-compact .ms-toggle { min-width: 70px; max-width: 160px; padding: 3px 18px 3px 6px; font-size: 11px; }
+.anno-row .info .ms { margin-right: 4px; vertical-align: middle; }
+.anno-row .info .lbl { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
 
 .ai-threshold {
   display: inline-flex; align-items: center; gap: 6px;

@@ -27,11 +27,13 @@ from . import db as db_mod
 from . import deidentify as deid
 from . import dicom_seg as dseg
 from . import dicom_sr as dsr
+from . import exporters as exporters
+from . import radiomics as radiomics_mod
 from . import inference as inf
 from . import pacs as pacs_mod
 from . import ws as ws_mod
 from .dicom_utils import (
-    NoPixelDataError, extract_sr_content, quick_summary,
+    NoPixelDataError, extract_sr_content, load_frame_array, quick_summary,
     read_metadata, render_frame_png,
 )
 
@@ -1051,6 +1053,7 @@ def list_annotations(
                 "annotation_id": a.get("id"),
                 "type": a.get("type", "bbox"),
                 "label": a.get("label"),
+                "labels": a.get("labels") or ([a["label"]] if a.get("label") else []),
                 "bi_rads": a.get("bi_rads"),
                 "status": ann_status,
                 "created_by": a.get("created_by"),
@@ -1204,13 +1207,10 @@ def _build_coco():
         img_id = image_ix[key]
         link_for_image = links.get(key)
         for a in entry.get("annotations", []):
-            label = a.get("label") or "other"
-            if label not in label_ix:
-                label_ix[label] = len(label_ix) + 1
-            cat_id = label_ix[label]
             bbox = a.get("bbox") or [0, 0, 0, 0]
             if len(bbox) != 4:
                 continue
+            labs = exporters.ann_labels(a) or ["other"]
             x_n, y_n, w_n, h_n = bbox
             if rows and cols:
                 x = x_n * cols
@@ -1221,24 +1221,8 @@ def _build_coco():
                 x, y, w, h = x_n, y_n, w_n, h_n
 
             ann_type = a.get("type") or "bbox"
-            ann_out = {
-                "id": next_ann_id,
-                "image_id": img_id,
-                "category_id": cat_id,
-                "type": ann_type,
-                "bbox": [round(x, 2), round(y, 2), round(w, 2), round(h, 2)],
-                "bbox_normalized": [x_n, y_n, w_n, h_n],
-                "iscrowd": 0,
-                "bi_rads": a.get("bi_rads") or "",
-                "note": a.get("note") or "",
-                "frame": a.get("frame") or 0,
-                "status": a.get("status") or "draft",
-                "created_by": a.get("created_by") or "",
-                "reviewed_by": a.get("reviewed_by") or "",
-            }
-            if link_for_image and link_for_image.get("patient_id"):
-                ann_out["patient_id"] = link_for_image["patient_id"]
-
+            # Geometry/segmentation is computed once and shared across labels.
+            seg_fields: dict = {}
             if ann_type == "polygon" and a.get("points"):
                 pts = a["points"]
                 if rows and cols:
@@ -1246,22 +1230,48 @@ def _build_coco():
                     for px, py in pts:
                         flat_px.append(round(px * cols, 2))
                         flat_px.append(round(py * rows, 2))
-                    ann_out["segmentation"] = [flat_px]
+                    seg_fields["segmentation"] = [flat_px]
                     pts_px = [(px * cols, py * rows) for px, py in pts]
-                    ann_out["area"] = round(abs(_polygon_area(pts_px)), 2)
+                    seg_fields["area"] = round(abs(_polygon_area(pts_px)), 2)
                 else:
                     flat_n: list[float] = []
                     for px, py in pts:
                         flat_n.append(px)
                         flat_n.append(py)
-                    ann_out["segmentation_normalized"] = [flat_n]
-                    ann_out["area"] = round(w * h, 2)
-                ann_out["points_count"] = len(pts)
+                    seg_fields["segmentation_normalized"] = [flat_n]
+                    seg_fields["area"] = round(w * h, 2)
+                seg_fields["points_count"] = len(pts)
             else:
-                ann_out["area"] = round(w * h, 2)
+                seg_fields["area"] = round(w * h, 2)
 
-            annotations_out.append(ann_out)
-            next_ann_id += 1
+            # Multi-label: emit one COCO annotation per label, sharing group_id.
+            group_id = a.get("id") or f"g{next_ann_id}"
+            for lab in labs:
+                if lab not in label_ix:
+                    label_ix[lab] = len(label_ix) + 1
+                ann_out = {
+                    "id": next_ann_id,
+                    "image_id": img_id,
+                    "category_id": label_ix[lab],
+                    "group_id": group_id,
+                    "label": lab,
+                    "labels": labs,
+                    "type": ann_type,
+                    "bbox": [round(x, 2), round(y, 2), round(w, 2), round(h, 2)],
+                    "bbox_normalized": [x_n, y_n, w_n, h_n],
+                    "iscrowd": 0,
+                    "bi_rads": a.get("bi_rads") or "",
+                    "note": a.get("note") or "",
+                    "frame": a.get("frame") or 0,
+                    "status": a.get("status") or "draft",
+                    "created_by": a.get("created_by") or "",
+                    "reviewed_by": a.get("reviewed_by") or "",
+                }
+                ann_out.update(seg_fields)
+                if link_for_image and link_for_image.get("patient_id"):
+                    ann_out["patient_id"] = link_for_image["patient_id"]
+                annotations_out.append(ann_out)
+                next_ann_id += 1
 
     categories = [{"id": v, "name": k} for k, v in sorted(label_ix.items(), key=lambda kv: kv[1])]
     return {
@@ -1705,6 +1715,172 @@ def deid_download(source: str, ref: str, _user: dict = Depends(auth_mod.require_
     )
 
 
+@app.get("/api/export/mask")
+def export_mask(
+    source: str,
+    ref: str,
+    format: str = "png",
+    _user: dict = Depends(auth_mod.require_user),
+):
+    """Segmentation mask for one image, built from its polygons + bboxes.
+
+    format=png   → label-indexed PNG (0 = background, 1..N = label classes)
+    format=nifti → label-indexed .nii.gz (same indexing)
+
+    The class→label legend is returned in the ``X-Mask-Legend`` header (JSON).
+    """
+    fmt = format.lower()
+    if fmt not in ("png", "nifti"):
+        raise HTTPException(400, "format must be 'png' or 'nifti'")
+    _validate_source(source)
+    _validate_ref(source, ref)
+    data = annot_store.load(ANNOT_DIR, source, ref)
+    annotations = data.get("annotations", []) or []
+    if not annotations:
+        raise HTTPException(404, "no annotations to export")
+    rows, cols = _resolve_dims(source, ref, data.get("rows"), data.get("cols"))
+    if not rows or not cols:
+        raise HTTPException(422, "image dimensions unknown; cannot rasterize mask")
+
+    label_names = [l["name"] for l in load_labels_config()[0]]
+    label_index = {name: i + 1 for i, name in enumerate(label_names)}
+    # Include any ad-hoc labels not in config so nothing is silently dropped.
+    for a in annotations:
+        for lab in exporters.ann_labels(a):
+            if lab not in label_index:
+                label_index[lab] = len(label_index) + 1
+
+    try:
+        mask = exporters.build_label_mask(annotations, rows, cols, label_index)
+    except Exception as e:
+        raise HTTPException(500, f"mask build failed: {e}")
+
+    base = Path(ref).stem or "annotations"
+    legend = json.dumps(exporters.mask_legend(label_index), ensure_ascii=False)
+    if fmt == "png":
+        body = exporters.mask_to_png_bytes(mask)
+        media, suffix = "image/png", "mask.png"
+    else:
+        body = exporters.mask_to_nifti_bytes(mask)
+        media, suffix = "application/gzip", "mask.nii.gz"
+
+    return StreamingResponse(
+        io.BytesIO(body),
+        media_type=media,
+        headers={
+            "Content-Disposition": f'attachment; filename="{base}_{suffix}"',
+            "X-Mask-Legend": legend,
+        },
+    )
+
+
+def _radiomics_for(source: str, ref: str, bins: int, only_id: Optional[str] = None):
+    """Compute radiomics features for one or all annotations on an image.
+
+    Returns ``(image_meta, [ {annotation_id, label, labels, frame, features}, ... ])``.
+    """
+    path = _resolve_dicom_path(source, ref)
+    data = annot_store.load(ANNOT_DIR, source, ref)
+    annotations = data.get("annotations", []) or []
+    if only_id:
+        annotations = [a for a in annotations if a.get("id") == only_id]
+    if not annotations:
+        raise HTTPException(404, "no matching annotations")
+    rows, cols = _resolve_dims(source, ref, data.get("rows"), data.get("cols"))
+    if not rows or not cols:
+        raise HTTPException(422, "image dimensions unknown")
+
+    # Load each needed frame once (radiomics is per-frame).
+    frame_cache: dict[int, tuple] = {}
+    out: list[dict] = []
+    for a in annotations:
+        frame = int(a.get("frame") or 0)
+        if frame not in frame_cache:
+            try:
+                frame_cache[frame] = load_frame_array(path, frame=frame)
+            except Exception as e:
+                raise HTTPException(500, f"pixel load failed: {e}")
+        image, spacing = frame_cache[frame]
+        fr_rows, fr_cols = image.shape[:2]
+        mask = radiomics_mod.roi_mask_from_annotation(a, fr_rows, fr_cols)
+        if not mask.any():
+            continue
+        try:
+            feats = radiomics_mod.extract(image, mask, spacing=spacing, bins=bins)
+        except Exception as e:
+            raise HTTPException(500, f"radiomics failed for {a.get('id')}: {e}")
+        out.append({
+            "annotation_id": a.get("id"),
+            "label": a.get("label"),
+            "labels": exporters.ann_labels(a),
+            "bi_rads": a.get("bi_rads") or "",
+            "frame": frame,
+            "type": a.get("type") or "bbox",
+            "spacing_mm": list(spacing) if spacing else None,
+            "features": feats,
+        })
+    if not out:
+        raise HTTPException(422, "ROI(s) produced no usable mask")
+    return {"source": source, "ref": ref, "rows": rows, "cols": cols, "bins": bins}, out
+
+
+@app.get("/api/radiomics")
+def get_radiomics(
+    source: str,
+    ref: str,
+    annotation_id: Optional[str] = None,
+    bins: int = 32,
+    _user: dict = Depends(auth_mod.require_user),
+):
+    """Radiomics features for one annotation (annotation_id) or all on the image."""
+    _validate_source(source)
+    _validate_ref(source, ref)
+    bins = max(8, min(128, int(bins)))
+    meta, items = _radiomics_for(source, ref, bins, only_id=annotation_id)
+    return {**meta, "results": items}
+
+
+@app.get("/api/radiomics/csv")
+def get_radiomics_csv(
+    source: str,
+    ref: str,
+    bins: int = 32,
+    _user: dict = Depends(auth_mod.require_user),
+):
+    """All ROIs on an image as a CSV — one row per annotation, one column per feature."""
+    _validate_source(source)
+    _validate_ref(source, ref)
+    bins = max(8, min(128, int(bins)))
+    _meta, items = _radiomics_for(source, ref, bins)
+
+    # Stable, flattened column order: family.feature
+    cols_keys: list[str] = []
+    for fam, feats in items[0]["features"].items():
+        for fname in feats:
+            cols_keys.append(f"{fam}.{fname}")
+    header = ["annotation_id", "label", "labels", "bi_rads", "frame", "type"] + cols_keys
+
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(header)
+    for it in items:
+        flat = {f"{fam}.{fn}": v for fam, feats in it["features"].items() for fn, v in feats.items()}
+        row = [
+            it["annotation_id"], it["label"] or "", ";".join(it["labels"]),
+            it["bi_rads"], it["frame"], it["type"],
+        ] + [flat.get(k, "") for k in cols_keys]
+        writer.writerow(row)
+
+    body = ("﻿" + buf.getvalue()).encode("utf-8")
+    base = Path(ref).stem or "annotations"
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    return StreamingResponse(
+        io.BytesIO(body),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{base}_radiomics_{stamp}.csv"'},
+    )
+
+
 @app.get("/api/stats/overview")
 def stats_overview(_admin: dict = Depends(auth_mod.require_role("admin", "reviewer"))):
     cached = _cache_get("stats")
@@ -1877,18 +2053,60 @@ def export_history_csv(
     )
 
 
+def _export_images() -> list[dict]:
+    """Normalized per-image view used by YOLO/VOC/CSV/mask exporters."""
+    out: list[dict] = []
+    for entry in annot_store.iter_all(ANNOT_DIR):
+        source = entry.get("source")
+        ref = entry.get("ref")
+        if not source or not ref:
+            continue
+        rows, cols = _resolve_dims(source, ref, entry.get("rows"), entry.get("cols"))
+        out.append({
+            "source": source,
+            "ref": ref,
+            "rows": rows,
+            "cols": cols,
+            "annotations": entry.get("annotations", []) or [],
+        })
+    return out
+
+
+_EXPORT_FORMATS = {
+    "coco": ("application/json", "json"),
+    "yolo": ("application/zip", "zip"),
+    "voc": ("application/zip", "zip"),
+    "csv": ("text/csv; charset=utf-8", "csv"),
+}
+
+
 @app.get("/api/export")
 def export(format: str = "coco"):
     fmt = format.lower()
-    if fmt != "coco":
-        raise HTTPException(400, "only format=coco is supported")
-    coco = _build_coco()
-    body = json.dumps(coco, ensure_ascii=False, indent=2).encode("utf-8")
+    if fmt not in _EXPORT_FORMATS:
+        raise HTTPException(400, f"unsupported format; use one of: {', '.join(_EXPORT_FORMATS)}")
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    fname = f"annotations_coco_{stamp}.json"
+    media, ext = _EXPORT_FORMATS[fmt]
+
+    if fmt == "coco":
+        body = json.dumps(_build_coco(), ensure_ascii=False, indent=2).encode("utf-8")
+        fname = f"annotations_coco_{stamp}.json"
+    else:
+        images = _export_images()
+        label_names = [l["name"] for l in load_labels_config()[0]]
+        if fmt == "yolo":
+            body = exporters.build_yolo_zip(images, label_names)
+            fname = f"annotations_yolo_{stamp}.zip"
+        elif fmt == "voc":
+            body = exporters.build_voc_zip(images)
+            fname = f"annotations_voc_{stamp}.zip"
+        else:  # csv
+            body = exporters.build_csv(images)
+            fname = f"annotations_{stamp}.csv"
+
     return StreamingResponse(
         io.BytesIO(body),
-        media_type="application/json",
+        media_type=media,
         headers={"Content-Disposition": f'attachment; filename="{fname}"'},
     )
 
@@ -2452,6 +2670,9 @@ def inference_models():
     return {"models": inf.list_models(), "models_dir": str(inf.MODELS_DIR)}
 
 
+ENSEMBLE_MODEL = "__ensemble__"
+
+
 class InferenceBody(BaseModel):
     source: str
     ref: str
@@ -2462,6 +2683,8 @@ class InferenceBody(BaseModel):
     imgsz: int = 1024
     wc: Optional[float] = None
     ww: Optional[float] = None
+    tta: bool = False
+    models: Optional[list[str]] = None  # for ensemble; default = all available
 
 
 class BatchInferenceBody(BaseModel):
@@ -2471,6 +2694,17 @@ class BatchInferenceBody(BaseModel):
     iou: float = 0.5
     imgsz: int = 1024
     auto_save: bool = False
+    tta: bool = False
+    models: Optional[list[str]] = None
+
+
+def _run_inference(png_bytes: bytes, *, model: str, conf: float, iou: float, imgsz: int,
+                   tta: bool, models: Optional[list[str]]):
+    """Dispatch to a single model or the WBF ensemble of several models."""
+    if model == ENSEMBLE_MODEL:
+        names = models or [m["name"] for m in inf.list_models()]
+        return inf.infer_ensemble(png_bytes, names, conf=conf, iou=iou, imgsz=imgsz, tta=tta)
+    return inf.infer_png(png_bytes, model_name=model, conf=conf, iou=iou, imgsz=imgsz, tta=tta)
 
 
 @app.post("/api/inference/batch")
@@ -2498,9 +2732,9 @@ async def inference_batch(
         try:
             path = _resolve_dicom_path(src, ref)
             png_bytes = render_frame_png(path, frame=0, max_dim=2048)
-            inf_res = inf.infer_png(
-                png_bytes, model_name=body.model,
-                conf=body.conf, iou=body.iou, imgsz=body.imgsz,
+            inf_res = _run_inference(
+                png_bytes, model=body.model, conf=body.conf, iou=body.iou,
+                imgsz=body.imgsz, tta=body.tta, models=body.models,
             )
         except Exception as e:
             results.append({"source": src, "ref": ref, "ok": False, "error": str(e)})
@@ -2562,12 +2796,9 @@ def inference_run(request: Request, body: InferenceBody, _user: dict = Depends(a
         raise HTTPException(500, f"render failed: {e}")
 
     try:
-        result = inf.infer_png(
-            png_bytes,
-            model_name=body.model,
-            conf=body.conf,
-            iou=body.iou,
-            imgsz=body.imgsz,
+        result = _run_inference(
+            png_bytes, model=body.model, conf=body.conf, iou=body.iou,
+            imgsz=body.imgsz, tta=body.tta, models=body.models,
         )
     except FileNotFoundError as e:
         raise HTTPException(404, str(e))

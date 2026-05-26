@@ -72,6 +72,16 @@
   </div>
 </div>
 
+<div class="modal" id="radiomicsModal" hidden>
+  <div class="modal-card wide">
+    <div class="modal-head">
+      <h2>📊 Radiomika tahlili</h2>
+      <button class="modal-close" id="radiomicsCloseBtn">✕</button>
+    </div>
+    <div class="modal-body" id="radiomicsBody"></div>
+  </div>
+</div>
+
 <div class="modal" id="adminModal" hidden>
   <div class="modal-card wide">
     <div class="modal-head">
@@ -232,7 +242,7 @@
       <button id="toolSelect" class="tool active" title="Tanlash (V)">▶ Select</button>
       <button id="toolBbox" class="tool" title="Bbox chizish (B)">▭ BBox</button>
       <button id="toolPoly" class="tool" title="Poligon chizish (P) — bosish bilan nuqta qo'yish, dblclick yoki Enter — yopish, Esc — bekor">⬢ Poly</button>
-      <select id="labelSelect" title="Label"></select>
+      <select id="labelSelect" title="Label (yangi annotatsiya uchun) — qo'shimcha label'larni o'ng paneldan belgilang"></select>
       <select id="biradsSelect" title="BI-RADS"><option value="">BI-RADS —</option></select>
       <span class="sep"></span>
       <select id="aiModelSelect" title="AI model" hidden></select>
@@ -241,6 +251,9 @@
         <label>≥<span id="aiConfLabel">25</span>%</label>
         <input type="range" id="aiConfSlider" min="10" max="95" step="5" value="25" />
       </span>
+      <label id="aiTtaWrap" title="Test-time augmentation — ko'p-masshtab + flip; aniqlikni oshiradi, sekinroq" hidden>
+        <input type="checkbox" id="aiTtaToggle" /> TTA
+      </label>
       <button id="aiAcceptAllBtn" title="Barcha takliflarni qabul qilish" hidden>✓ Hammasini qabul</button>
       <button id="aiClearBtn" title="AI takliflarini tozalash" hidden>✕</button>
       <span class="sep"></span>
@@ -248,10 +261,17 @@
       <span id="frameLabel">0 / 0</span>
       <span class="zoomLbl" id="zoomLbl">100%</span>
       <span class="save-status" id="saveStatus"></span>
-      <button id="exportBtn" title="Barcha annotatsiyalarni COCO JSON sifatida yuklab olish">⤓ Eksport</button>
+      <button id="saveBtn" title="Annotatsiyalarni saqlash (Ctrl+S)" disabled>💾 Saqlash</button>
+      <button id="exportBtn" title="Barcha annotatsiyalarni COCO JSON sifatida yuklab olish">⤓ COCO</button>
+      <button id="exportYoloBtn" title="Barcha annotatsiyalarni YOLO (.txt) dataset (ZIP) sifatida yuklab olish">⤓ YOLO</button>
+      <button id="exportVocBtn" title="Barcha annotatsiyalarni Pascal VOC (XML, ZIP) sifatida yuklab olish">⤓ VOC</button>
+      <button id="exportCsvBtn" title="Barcha annotatsiyalarni CSV jadval (har annotatsiya bir qator, ko'p-label ustun bilan) sifatida yuklab olish">⤓ CSV</button>
       <button id="deidBtn" title="PHI tahlil va anonimlashtirilgan DICOM yuklab olish" hidden>🛡 De-ID</button>
       <button id="srBtn" title="Annotatsiyalarni DICOM-SR sifatida yuklab olish" hidden>📄 SR</button>
       <button id="segBtn" title="Annotatsiyalarni DICOM-SEG (pixel mask) sifatida yuklab olish" hidden>🖼 SEG</button>
+      <button id="maskPngBtn" title="Joriy rasm uchun segmentatsiya maskasi — PNG (label-indexed)" hidden>🎭 Mask PNG</button>
+      <button id="maskNiftiBtn" title="Joriy rasm uchun segmentatsiya maskasi — NIfTI (.nii.gz)" hidden>🎭 NIfTI</button>
+      <button id="radiomicsBtn" title="Tanlangan annotatsiya uchun radiomika tahlili (ROI bo'yicha 60 ta belgi)" hidden>📊 Radiomika</button>
       <button id="cStoreBtn" title="DICOM'ni PACS serverga yuborish" hidden>📤 PACS</button>
       <select id="tplSelect" title="Annotation template'ni qo'llash" hidden></select>
       <button id="tplSaveBtn" title="Joriy annotatsiyalarni template sifatida saqlash" hidden>💾 Tpl</button>

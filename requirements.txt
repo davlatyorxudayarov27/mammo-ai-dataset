@@ -19,3 +19,4 @@ pylibjpeg-rle>=2.0
 opencv-python-headless>=4.8
 scipy>=1.11
 scikit-image>=0.22
+nibabel>=5.2
