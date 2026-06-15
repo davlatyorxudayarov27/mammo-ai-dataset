@@ -20,3 +20,4 @@ opencv-python-headless>=4.8
 scipy>=1.11
 scikit-image>=0.22
 nibabel>=5.2
+anthropic>=0.40

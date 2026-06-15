@@ -1182,6 +1182,49 @@ def system_gpu(_user: dict = Depends(auth_mod.require_user)):
 
 
 # --------------------------------------------------------------------------- #
+# Hisobot generatori — strukturaviy topilmalar -> mammografiya hisoboti        #
+# --------------------------------------------------------------------------- #
+class ReportDetection(BaseModel):
+    laterality: str = ""
+    view: str = ""
+    quadrant: str = ""
+    cx: Optional[float] = None
+    cy: Optional[float] = None
+    type: str = "mass"
+    size_mm: Optional[float] = None
+    margin: str = ""
+    birads: str = "0"
+    confidence: Optional[float] = None
+
+
+class ReportGenerateBody(BaseModel):
+    detections: list[ReportDetection] = []
+    findings: Optional[dict] = None
+    dicom_meta: dict = {}
+    study_views: list[str] = []
+    mode: str = "auto"        # auto | template | llm
+    lang: str = "uz"
+    examples: list[str] = []
+
+
+@app.post("/api/report/generate")
+def report_generate(body: ReportGenerateBody, _user: dict = Depends(auth_mod.require_user)):
+    """Strukturaviy topilmalardan mammografiya hisoboti qoralamasini yaratadi.
+    mode=auto: Claude (ANTHROPIC_API_KEY bo'lsa) yoki shablonga fallback."""
+    from . import report_findings as rf
+    from . import report_gen as rg
+    findings = body.findings or rf.build_findings(
+        [d.model_dump() for d in body.detections],
+        dicom_meta=body.dicom_meta,
+        study_views=body.study_views,
+    )
+    out = rg.generate_report(
+        findings, mode=body.mode, examples=(body.examples or None), lang=body.lang
+    )
+    return {"findings": findings, **out}
+
+
+# --------------------------------------------------------------------------- #
 # Model management dashboard — statistika, delete, versionlar                  #
 # --------------------------------------------------------------------------- #
 @app.get("/api/models/stats")
