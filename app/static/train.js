@@ -130,6 +130,7 @@ $('datasetSel').addEventListener('change', () => {
   $('dataYamlPath').value = sel.value;
   const opt = sel.options[sel.selectedIndex];
   $('datasetInfo').textContent = opt ? `train: ${opt.dataset.train || 0} · val: ${opt.dataset.val || 0}` : '';
+  validateDataset();
 });
 
 async function startTrain() {
@@ -193,6 +194,7 @@ function watchRun(runId) {
   _currentRunId = runId;
   $('currentRun').innerHTML = `Kuzatilmoqda: <code>${runId}</code>`;
   $('liveLog').hidden = false;
+  $('stopBtn').hidden = false;
   if (_pollTimer) clearInterval(_pollTimer);
   _pollTimer = setInterval(() => pollRun(runId), 3000);
   pollRun(runId);
@@ -221,9 +223,13 @@ async function pollRun(runId) {
       log.textContent = j.log_tail.join('\n');
       log.scrollTop = log.scrollHeight;
     }
-    if (j.status === 'done' || j.status === 'failed') {
+    fetchAndDrawMetrics(runId);
+    const finished = (j.status === 'done' || j.status === 'failed' || j.status === 'stopped');
+    $('stopBtn').hidden = finished || !j.is_alive;
+    if (finished) {
       clearInterval(_pollTimer); _pollTimer = null;
       $('startBtn').disabled = false;
+      $('stopBtn').hidden = true;
       loadRuns();
     }
   } catch (e) {
@@ -231,12 +237,208 @@ async function pollRun(runId) {
   }
 }
 
+// ---------- Jonli grafiklar (canvas, CDN'siz) ----------
+function _col(row, keys) {
+  for (const k of keys) {
+    if (row[k] !== undefined && row[k] !== '' && !isNaN(row[k])) return Number(row[k]);
+  }
+  return null;
+}
+function drawChart(canvasId, series) {
+  const cv = $(canvasId);
+  if (!cv) return;
+  const cssW = cv.clientWidth || 600;
+  if (cv.width !== cssW) cv.width = cssW;
+  const W = cv.width, H = cv.height, ctx = cv.getContext('2d');
+  ctx.clearRect(0, 0, W, H);
+  const padL = 42, padR = 10, padT = 18, padB = 18;
+  let xs = [], ys = [];
+  series.forEach(s => s.data.forEach(p => { xs.push(p.x); ys.push(p.y); }));
+  if (!xs.length) {
+    ctx.fillStyle = '#666'; ctx.font = '12px monospace';
+    ctx.fillText("ma'lumot yo'q — train boshlanmagan", 12, H / 2);
+    return;
+  }
+  let xmin = Math.min(...xs), xmax = Math.max(...xs);
+  let ymin = Math.min(...ys), ymax = Math.max(...ys);
+  if (xmin === xmax) xmax = xmin + 1;
+  if (ymin === ymax) { ymin -= 0.5; ymax += 0.5; }
+  const py0 = (ymax - ymin) * 0.08; ymin -= py0; ymax += py0;
+  const X = x => padL + (x - xmin) / (xmax - xmin) * (W - padL - padR);
+  const Y = y => H - padB - (y - ymin) / (ymax - ymin) * (H - padT - padB);
+  ctx.strokeStyle = '#1e2230'; ctx.fillStyle = '#888'; ctx.font = '10px monospace'; ctx.lineWidth = 1;
+  for (let i = 0; i <= 4; i++) {
+    const yy = ymin + (ymax - ymin) * i / 4, py = Y(yy);
+    ctx.beginPath(); ctx.moveTo(padL, py); ctx.lineTo(W - padR, py); ctx.stroke();
+    ctx.fillText(yy.toFixed(2), 2, py + 3);
+  }
+  ctx.fillText('ep ' + Math.round(xmax), W - 36, H - 5);
+  series.forEach(s => {
+    if (!s.data.length) return;
+    ctx.strokeStyle = s.color; ctx.lineWidth = 1.6; ctx.beginPath();
+    s.data.forEach((p, i) => { const px = X(p.x), py = Y(p.y); i ? ctx.lineTo(px, py) : ctx.moveTo(px, py); });
+    ctx.stroke();
+    const last = s.data[s.data.length - 1];
+    ctx.fillStyle = s.color; ctx.beginPath(); ctx.arc(X(last.x), Y(last.y), 2.5, 0, 7); ctx.fill();
+  });
+  let lx = padL + 2; ctx.font = '10px monospace';
+  series.forEach(s => {
+    ctx.fillStyle = s.color; ctx.fillRect(lx, 6, 9, 9);
+    ctx.fillStyle = '#bbb'; ctx.fillText(s.label, lx + 12, 14);
+    lx += 12 + ctx.measureText(s.label).width + 14;
+  });
+}
+function drawAllCharts(rows) {
+  const ep = r => { const e = _col(r, ['epoch']); return e == null ? 0 : e; };
+  const sumLoss = (r, pfx) => {
+    const v = [`${pfx}/box_loss`, `${pfx}/cls_loss`, `${pfx}/dfl_loss`].map(k => _col(r, [k])).filter(x => x != null);
+    return v.length ? v.reduce((a, x) => a + x, 0) : null;
+  };
+  const pick = (key) => rows.map(r => { const y = _col(r, key); return y == null ? null : { x: ep(r), y }; }).filter(Boolean);
+  const lossTr = rows.map(r => { const y = sumLoss(r, 'train'); return y == null ? null : { x: ep(r), y }; }).filter(Boolean);
+  const lossVal = rows.map(r => { const y = sumLoss(r, 'val'); return y == null ? null : { x: ep(r), y }; }).filter(Boolean);
+  drawChart('chartLoss', [
+    { label: 'train', color: '#4a90e2', data: lossTr },
+    { label: 'val', color: '#ff8c42', data: lossVal },
+  ]);
+  drawChart('chartMap', [
+    { label: 'mAP@50', color: '#22c55e', data: pick(['metrics/mAP50(B)', 'metrics/mAP_0.5']) },
+    { label: 'mAP@50-95', color: '#a78bfa', data: pick(['metrics/mAP50-95(B)', 'metrics/mAP_0.5:0.95']) },
+  ]);
+  drawChart('chartPR', [
+    { label: 'precision', color: '#38bdf8', data: pick(['metrics/precision(B)', 'metrics/precision']) },
+    { label: 'recall', color: '#f472b6', data: pick(['metrics/recall(B)', 'metrics/recall']) },
+  ]);
+}
+async function fetchAndDrawMetrics(runId) {
+  try {
+    const j = await apiJson(`/api/training/metrics/${runId}`);
+    drawAllCharts(j.rows || []);
+  } catch (e) { /* jim */ }
+}
+
+// ---------- GPU monitor ----------
+async function loadGpu() {
+  const el = $('gpuInfo');
+  if (!el) return;
+  try {
+    const j = await apiJson('/api/system/gpu');
+    if (!j.available || !j.gpus.length) {
+      el.innerHTML = "GPU: <span class='ts-warn'>topilmadi</span>"
+        + (j.torch_cuda === false ? " <span class='ts-bad'>⚠ CPU-torch</span>" : '');
+      return;
+    }
+    const g = j.gpus[0];
+    const usedGb = (g.mem_used_mb / 1024).toFixed(1), totGb = (g.mem_total_mb / 1024).toFixed(1);
+    const pct = Math.min(100, g.mem_used_mb / g.mem_total_mb * 100);
+    const cudaWarn = j.torch_cuda ? '' : " <span class='ts-bad'>⚠ CPU-torch</span>";
+    el.innerHTML = `GPU: ${g.name.replace('NVIDIA ', '')} `
+      + `<span class="bar-wrap"><span class="bar-fill" style="width:${pct}%"></span></span> `
+      + `${usedGb}/${totGb} GB · ${g.util_pct}% · ${g.temp_c}°C${cudaWarn}`;
+    window._gpuTotalMb = g.mem_total_mb;
+    window._gpuFreeMb = g.mem_free_mb;
+    estimateVram();
+  } catch (e) {
+    el.textContent = 'GPU: —';
+  }
+}
+
+// ---------- Dataset tekshiruvi ----------
+async function validateDataset() {
+  const yaml = $('dataYamlPath').value || $('datasetSel').value;
+  const box = $('datasetValidate');
+  if (!yaml) { box.hidden = true; return; }
+  box.hidden = false;
+  box.innerHTML = '<span class="ts-hint">tekshirilmoqda…</span>';
+  try {
+    const j = await apiJson('/api/training/validate?yaml=' + encodeURIComponent(yaml));
+    const splitHtml = (name, s) => {
+      if (!s) return `<div class="vrow"><span>${name}</span><span class="ts-hint">yo'q</span></div>`;
+      if (!s.exists) return `<div class="vrow"><span>${name}</span><span class="ts-bad">papka topilmadi</span></div>`;
+      const warns = [];
+      if (s.missing_labels) warns.push(`<span class="ts-warn">${s.missing_labels} rasm label'siz</span>`);
+      if (s.orphan_labels) warns.push(`<span class="ts-warn">${s.orphan_labels} label rasmsiz</span>`);
+      if (s.empty_images) warns.push(`<span class="ts-bad">${s.empty_images} bo'sh fayl</span>`);
+      const cc = Object.entries(s.class_counts || {});
+      const maxc = Math.max(1, ...cc.map(([, v]) => v));
+      const ccHtml = cc.map(([k, v]) =>
+        `<div class="vrow"><span>&nbsp;&nbsp;${k}</span><span>${v} <span class="ts-bar" style="width:${Math.round(v / maxc * 60)}px"></span></span></div>`
+      ).join('');
+      return `<div class="vrow"><strong>${name}</strong><span class="ts-ok">${s.images} rasm · ${s.labels} label</span></div>`
+        + ccHtml
+        + (warns.length ? `<div class="vrow"><span></span><span>${warns.join(' · ')}</span></div>` : '');
+    };
+    box.innerHTML =
+      `<div class="vrow"><span>Klasslar (nc=${j.nc})</span><span>${Object.values(j.names || {}).join(', ') || '—'}</span></div>`
+      + splitHtml('train', j.train)
+      + splitHtml('val', j.val);
+  } catch (e) {
+    box.innerHTML = `<span class="ts-bad">Xato: ${e.message}</span>`;
+  }
+}
+
+// ---------- Preflight VRAM taxmini ----------
+function modelSizeLetter(name) {
+  const m = (name || '').toLowerCase().match(/yolov?\d+([nsmlxce])/);
+  if (!m) return 'm';
+  return { c: 'm', e: 'x' }[m[1]] || m[1];
+}
+function estimateVram() {
+  const el = $('vramEstimate');
+  if (!el) return;
+  const imgsz = parseInt($('imgsz').value, 10) || 1024;
+  const batch = parseInt($('batch').value, 10) || 8;
+  const dev = $('device').value;
+  if (dev === 'cpu') {
+    el.className = 'ts-hint';
+    el.innerHTML = "🧮 CPU rejimi tanlangan — GPU ishlatilmaydi (sekin bo'ladi).";
+    return;
+  }
+  const letter = modelSizeLetter($('baseModelSel').value);
+  const perImg = { n: 0.10, s: 0.16, m: 0.30, l: 0.42, x: 0.62 }[letter] || 0.30;
+  const estGb = 1.2 + perImg * batch * Math.pow(imgsz / 640, 2);
+  const totGb = (window._gpuTotalMb || 0) / 1024;
+  let cls = 'ts-hint', note = '';
+  if (totGb > 0) {
+    if (estGb > totGb * 0.92) { cls = 'ts-bad'; note = ` — ⚠ ${totGb.toFixed(1)} GB ga sig'masligi mumkin! batch yoki imgsz'ni kamaytiring`; }
+    else if (estGb > totGb * 0.72) { cls = 'ts-warn'; note = ` — chegaraga yaqin (${totGb.toFixed(1)} GB)`; }
+    else { cls = 'ts-ok'; note = ` — ${totGb.toFixed(1)} GB ga sig'adi`; }
+  }
+  el.className = cls;
+  el.innerHTML = `🧮 Taxminiy VRAM: ~${estGb.toFixed(1)} GB (${letter}, imgsz ${imgsz}, batch ${batch})${note}`;
+}
+
+// ---------- Stop ----------
+async function stopTrain() {
+  if (!_currentRunId) return;
+  if (!confirm("Train'ni to'xtatasizmi? last.pt saqlanadi — keyin Resume bilan davom ettirsa bo'ladi.")) return;
+  const btn = $('stopBtn'); btn.disabled = true;
+  try {
+    const r = await api('/api/training/stop/' + _currentRunId, { method: 'POST' });
+    if (!r.ok) throw new Error(await r.text());
+    $('startStatus').innerHTML = "⏹ To'xtatilmoqda…";
+  } catch (e) {
+    alert('Stop xato: ' + e.message);
+  } finally {
+    btn.disabled = false;
+  }
+}
+
 $('startBtn').addEventListener('click', startTrain);
+$('stopBtn').addEventListener('click', stopTrain);
 $('refreshRunsBtn').addEventListener('click', loadRuns);
-$('refreshAllBtn').addEventListener('click', () => { loadDatasets(); loadBaseModels(); loadRuns(); });
+$('refreshAllBtn').addEventListener('click', () => { loadDatasets(); loadBaseModels(); loadRuns(); loadGpu(); });
+$('validateBtn').addEventListener('click', validateDataset);
+$('dataYamlPath').addEventListener('change', validateDataset);
+['imgsz', 'batch', 'device'].forEach(id => $(id).addEventListener('change', estimateVram));
+$('baseModelSel').addEventListener('change', estimateVram);
 
 // Boshlash
 (async () => {
   await loadUser();
   await Promise.all([loadDatasets(), loadBaseModels(), loadRuns()]);
+  drawAllCharts([]);
+  await loadGpu();
+  estimateVram();
+  setInterval(loadGpu, 4000);
 })();

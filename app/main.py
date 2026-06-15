@@ -5,6 +5,9 @@ import io
 import json
 import os
 import re
+import subprocess
+import sys
+import threading
 import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
@@ -12,7 +15,7 @@ from pathlib import Path
 from typing import Optional
 
 import pydicom
-from fastapi import Depends, FastAPI, File, HTTPException, Query, Request, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi import BackgroundTasks, Depends, FastAPI, File, HTTPException, Query, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -49,6 +52,118 @@ STATIC_DIR = BASE_DIR / "static"
 AUTO_DEIDENTIFY = os.environ.get("AUTO_DEIDENTIFY", "1").strip().lower() not in (
     "0", "false", "no", "off", ""
 )
+
+# (A1) Avtomatik AI inference upload paytida — radiolog ekranga kelganda
+# pseudo-bbox'lar allaqachon tayyor. Sukut bo'yicha O'CHIQ (opt-in):
+# AUTO_INFER_ON_UPLOAD=1 ko'rsatilganda yoqiladi.
+AUTO_INFER_ON_UPLOAD = os.environ.get("AUTO_INFER_ON_UPLOAD", "0").strip().lower() in (
+    "1", "true", "yes", "on"
+)
+AUTO_INFER_MODEL = os.environ.get("AUTO_INFER_MODEL", "").strip()
+AUTO_INFER_IOU = float(os.environ.get("AUTO_INFER_IOU", "0.5") or "0.5")
+AUTO_INFER_IMGSZ = int(os.environ.get("AUTO_INFER_IMGSZ", "1024") or "1024")
+
+# (A2) Ishonch 3-zona klassifikatsiyasi: yashil (avto-qabul) / sariq (ko'rib chiqish) / qizil (shubhali).
+# Default chegaralar:
+#   conf ≥ 0.85         → auto_accept (yashil, status=ai_accepted)
+#   0.40 ≤ conf < 0.85  → review      (sariq, status=ai_review)
+#   0.20 ≤ conf < 0.40  → suspect     (qizil pulsatsiya, status=ai_suspect)
+#   conf < 0.20         → tashlanadi (saqlanmaydi)
+AUTO_INFER_ACCEPT_THR = float(os.environ.get("AUTO_INFER_ACCEPT_THR", "0.85") or "0.85")
+AUTO_INFER_REVIEW_THR = float(os.environ.get("AUTO_INFER_REVIEW_THR", "0.40") or "0.40")
+AUTO_INFER_SUSPECT_THR = float(os.environ.get("AUTO_INFER_SUSPECT_THR", "0.20") or "0.20")
+# Inference uchun YOLO conf chegarasi — eng past zona chegarasi (suspect_thr)
+AUTO_INFER_CONF = AUTO_INFER_SUSPECT_THR
+
+
+def _classify_confidence_zone(conf: float) -> tuple[str, str]:
+    """Conf qiymatidan (zone_name, status) qaytaradi.
+    Agar conf < suspect_thr bo'lsa, ('drop', '') qaytariladi — tashlanadi."""
+    if conf >= AUTO_INFER_ACCEPT_THR:
+        return ("auto_accept", "ai_accepted")
+    if conf >= AUTO_INFER_REVIEW_THR:
+        return ("review", "ai_review")
+    if conf >= AUTO_INFER_SUSPECT_THR:
+        return ("suspect", "ai_suspect")
+    return ("drop", "")
+
+
+def _auto_infer_uploaded(file_id: str, dicom_path: Path, rows: int, cols: int) -> dict:
+    """Yuklangan DICOM uchun AI inference + pseudo-annotation saqlash.
+    Hech qachon istisno qaytarmaydi — upload muvaffaqiyatsiz bo'lmasligi uchun."""
+    info: dict = {"ran": False, "detections": 0, "model": None, "error": None}
+    if not (rows and cols):
+        info["error"] = "no pixels"
+        return info
+    try:
+        models = inf.list_models()
+        if not models:
+            info["error"] = "no models available"
+            return info
+        model_name = AUTO_INFER_MODEL or models[0]["name"]
+        try:
+            png_bytes = render_frame_png(dicom_path, frame=0, max_dim=2048)
+        except Exception as e:
+            info["error"] = f"render failed: {e}"
+            return info
+        try:
+            res = inf.infer_png(
+                png_bytes, model_name=model_name,
+                conf=AUTO_INFER_CONF, iou=AUTO_INFER_IOU,
+                imgsz=AUTO_INFER_IMGSZ, tta=False,
+            )
+        except Exception as e:
+            info["error"] = f"inference failed: {e}"
+            info["model"] = model_name
+            return info
+        detections = res.get("detections", []) or []
+        now = datetime.now(timezone.utc).isoformat()
+        anns = []
+        zone_counts = {"auto_accept": 0, "review": 0, "suspect": 0, "drop": 0}
+        for d in detections:
+            conf = float(d.get("confidence", 0.0))
+            zone, status = _classify_confidence_zone(conf)
+            zone_counts[zone] = zone_counts.get(zone, 0) + 1
+            if zone == "drop":
+                continue
+            anns.append({
+                "id": "ai" + uuid.uuid4().hex[:11],
+                "type": "bbox",
+                "label": d.get("label", "?"),
+                "bi_rads": "",
+                "note": f"AI: conf={conf:.2f} ({zone})",
+                "frame": 0,
+                "bbox": d.get("bbox", [0, 0, 0, 0]),
+                "confidence": conf,
+                "zone": zone,
+                "created_at": now,
+                "updated_at": now,
+                "created_by": f"ai:{model_name}",
+                "status": status,
+            })
+        if anns:
+            payload = {
+                "rows": rows,
+                "cols": cols,
+                "annotations": anns,
+            }
+            annot_store.save(ANNOT_DIR, "upload", file_id, payload)
+        info.update({
+            "ran": True,
+            "detections": len(detections),
+            "kept": len(anns),
+            "zones": zone_counts,
+            "model": model_name,
+            "thresholds": {
+                "accept": AUTO_INFER_ACCEPT_THR,
+                "review": AUTO_INFER_REVIEW_THR,
+                "suspect": AUTO_INFER_SUSPECT_THR,
+            },
+        })
+        return info
+    except Exception as e:
+        info["error"] = f"{type(e).__name__}: {e}"
+        return info
 
 DEFAULT_LABELS = [
     {"name": "mass", "color": "#ff5050"},
@@ -424,6 +539,7 @@ _UPLOAD_CHUNK = 1024 * 1024  # 1 MB
 
 @app.post("/api/upload")
 async def upload(
+    background_tasks: BackgroundTasks,
     files: list[UploadFile] = File(...),
     _user: dict = Depends(auth_mod.require_user),
 ):
@@ -476,6 +592,14 @@ async def upload(
             "original_name": f.filename,
             "deidentified": deidentified_now,
         }
+
+        # (A1) Avtomatik AI inference — endi BACKGROUND task (upload bloklanmaydi).
+        # Foydalanuvchi DICOM'ni darhol ko'radi; bbox'lar 10-20 sek ichida paydo bo'ladi.
+        if AUTO_INFER_ON_UPLOAD and rows and cols:
+            background_tasks.add_task(_auto_infer_uploaded, file_id, out, rows, cols)
+            info["ai_inference"] = {"queued": True, "model": AUTO_INFER_MODEL or "default"}
+            info["annotation_count"] = 0  # hali fonda hisoblanmoqda
+
         saved.append(info)
     return {"files": saved}
 
@@ -499,6 +623,942 @@ def metadata(file_id: str):
     if not p.exists():
         raise HTTPException(404)
     return read_metadata(p)
+
+
+# --------------------------------------------------------------------------- #
+# Annotation bo'lgan fayllarni boshqa papkaga eksport (copy)                     #
+# --------------------------------------------------------------------------- #
+class ExportAnnotatedBody(BaseModel):
+    destination: str                          # mutlaq yo'l
+    source_kind: str = "upload"                # "upload" | "local" | "both"
+    require_annotations: bool = True           # eng kamida 1 ta annotation kerakmi
+    require_human: bool = False                # AI emas, qo'lda yaratilganlar
+    statuses: Optional[list[str]] = None       # status filtri
+    include_annotation_json: bool = True       # JSON sidecar ham
+    organize_by: str = "flat"                  # "flat" | "by_patient" | "by_status"
+    overwrite: bool = False
+
+
+def _filter_annotations(anns: list[dict], body: ExportAnnotatedBody) -> bool:
+    """Berilgan annotation ro'yxati filtrlardan o'tadimi."""
+    if not anns:
+        return not body.require_annotations
+    if body.require_human:
+        if not any(not str(a.get("created_by", "")).startswith("ai:") for a in anns):
+            return False
+    if body.statuses:
+        if not any(a.get("status") in body.statuses for a in anns):
+            return False
+    return True
+
+
+@app.post("/api/export/annotated")
+def export_annotated(
+    body: ExportAnnotatedBody,
+    _user: dict = Depends(auth_mod.require_user),
+):
+    """Annotation bor (yoki belgilangan status'dagi) fayllarni boshqa papkaga ko'chiradi.
+    Asl fayllar joyida qoladi (copy). Annotation JSON sidecar ixtiyoriy."""
+    import shutil
+
+    dest_str = (body.destination or "").strip()
+    if not dest_str:
+        raise HTTPException(400, "destination yo'l bo'sh")
+    dest = Path(dest_str)
+    # Xavfsizlik: sistem papkalariga yozishga ruxsat bermaymiz
+    forbidden_starts = [r"C:\Windows", r"C:\Program Files", "/etc", "/usr", "/bin", "/sbin", "/sys", "/proc"]
+    if any(str(dest).lower().startswith(x.lower()) for x in forbidden_starts):
+        raise HTTPException(400, f"Bu papkaga yozish taqiqlangan: {dest}")
+    try:
+        dest.mkdir(parents=True, exist_ok=True)
+    except Exception as e:
+        raise HTTPException(400, f"Papka yaratib bo'lmadi: {e}")
+    if not dest.is_dir():
+        raise HTTPException(400, "destination papka emas")
+
+    copied: list[dict] = []
+    skipped: list[dict] = []
+    no_anns: list[str] = []
+
+    def process(file_id: str, dcm_path: Path, source: str):
+        ann_path = annot_store._annot_path(ANNOT_DIR, source, file_id)
+        anns: list[dict] = []
+        if ann_path.exists():
+            try:
+                data = json.loads(ann_path.read_text(encoding="utf-8"))
+                anns = data.get("annotations") or []
+            except Exception:
+                anns = []
+        if not _filter_annotations(anns, body):
+            if body.require_annotations:
+                no_anns.append(file_id)
+            return
+
+        # Maqsad katalogni aniqlash
+        target_dir = dest
+        if body.organize_by == "by_patient":
+            try:
+                ds = pydicom.dcmread(str(dcm_path), stop_before_pixels=True, force=True)
+                pid = str(getattr(ds, "PatientID", "") or "").strip() or "ANON"
+                pid = re.sub(r"[^A-Za-z0-9_-]+", "_", pid)
+                target_dir = dest / pid
+            except Exception:
+                target_dir = dest / "UNKNOWN"
+        elif body.organize_by == "by_status":
+            # Birinchi annotationning statusiga ko'ra
+            st = (anns[0].get("status") if anns else None) or "no_status"
+            st = re.sub(r"[^A-Za-z0-9_-]+", "_", str(st))
+            target_dir = dest / st
+        target_dir.mkdir(parents=True, exist_ok=True)
+
+        target = target_dir / f"{file_id}.dcm"
+        if target.exists() and not body.overwrite:
+            skipped.append({"id": file_id, "reason": "exists"})
+            return
+        try:
+            shutil.copy2(dcm_path, target)
+        except Exception as e:
+            skipped.append({"id": file_id, "reason": f"copy_failed: {e}"})
+            return
+        ann_copied = False
+        if body.include_annotation_json and ann_path.exists():
+            try:
+                shutil.copy2(ann_path, target_dir / ann_path.name)
+                ann_copied = True
+            except Exception:
+                pass
+        copied.append({
+            "id": file_id, "target": str(target),
+            "annotations": len(anns), "annotation_json": ann_copied,
+        })
+
+    # Upload'lar
+    if body.source_kind in ("upload", "both"):
+        for dcm in sorted(UPLOAD_DIR.glob("*.dcm")):
+            process(dcm.stem, dcm, "upload")
+
+    # Local DICOM'lar — annotation papkasiga "local__" prefix bilan
+    if body.source_kind in ("local", "both"):
+        for ann_path in sorted(ANNOT_DIR.glob("local__*.json")):
+            file_id = ann_path.stem.replace("local__", "", 1)
+            # Lokal yo'lni qayta tiklab bo'lmaydi (annotatsiya nomida hash) —
+            # bu rejim faqat upload uchun ishonchli; lokal uchun keyin yaxshilanadi.
+            no_anns.append(f"local:{file_id} (lokal eksport hozircha qo'llab-quvvatlanmaydi)")
+
+    return {
+        "destination": str(dest),
+        "copied_count": len(copied),
+        "skipped_count": len(skipped),
+        "no_annotations_count": len(no_anns),
+        "copied": copied[:200],
+        "skipped": skipped[:50],
+    }
+
+
+# --------------------------------------------------------------------------- #
+# Training dataset tayyorlash — YOLO formati (Ultralytics)                     #
+# --------------------------------------------------------------------------- #
+# Training run holatlarini xotirada saqlash (process'lar ro'yxati)
+TRAINING_RUNS: dict = {}  # run_id -> {status, log_path, started_at, finished_at, dest_path, last_metrics}
+
+def _training_log_path(run_id: str) -> Path:
+    d = BASE_DIR / "training_runs"
+    d.mkdir(exist_ok=True)
+    return d / f"{run_id}.log"
+
+
+# Ishlab turgan training subprocess'lar: run_id -> subprocess.Popen
+TRAIN_PROCS: dict = {}
+
+
+def _kill_proc_tree(pid: int) -> None:
+    """Jarayon va uning bolalarini majburan to'xtatish (Windows: taskkill /T)."""
+    if os.name == "nt":
+        subprocess.run(
+            ["taskkill", "/PID", str(pid), "/T", "/F"],
+            capture_output=True, text=True,
+        )
+    else:
+        import signal as _sig
+        try:
+            os.killpg(os.getpgid(pid), _sig.SIGTERM)
+        except Exception:
+            try:
+                os.kill(pid, _sig.SIGTERM)
+            except Exception:
+                pass
+
+
+def _monitor_training(run_id: str, proc: "subprocess.Popen", logf) -> None:
+    """Subprocess tugashini kutadi va status.json'dan yakuniy holatni o'qiydi."""
+    rc = proc.wait()
+    try:
+        logf.close()
+    except Exception:
+        pass
+    state = TRAINING_RUNS.get(run_id, {})
+    project_dir = Path(state.get("project_dir") or (BASE_DIR / "training_runs" / run_id))
+    final: dict = {}
+    status_json = project_dir / "status.json"
+    if status_json.exists():
+        try:
+            final = json.loads(status_json.read_text(encoding="utf-8"))
+        except Exception:
+            final = {}
+    for k in ("status", "best_pt", "model_deployed", "last_metrics", "error", "error_warning"):
+        if k in final:
+            state[k] = final[k]
+    if state.get("_stop_requested"):
+        state["status"] = "stopped"
+    elif "status" not in final or final.get("status") == "running":
+        # status.json yo'q yoki yarim — jarayon kutilmaganda tugagan
+        state["status"] = "failed" if rc != 0 else "done"
+    state["return_code"] = rc
+    state["finished_at"] = datetime.now(timezone.utc).isoformat()
+    state.pop("_stop_requested", None)
+    TRAINING_RUNS[run_id] = state
+    TRAIN_PROCS.pop(run_id, None)
+
+
+def _launch_training(run_id: str, params: dict) -> None:
+    """Training'ni alohida subprocess sifatida ishga tushiradi (Stop mumkin bo'lishi uchun)."""
+    project_dir = BASE_DIR / "training_runs" / run_id
+    project_dir.mkdir(parents=True, exist_ok=True)
+    log_path = _training_log_path(run_id)
+
+    worker_params = dict(params)
+    worker_params["run_id"] = run_id
+    worker_params["project_dir"] = str(project_dir)
+    worker_params["models_dir"] = str(inf.MODELS_DIR)
+    params_path = project_dir / "params.json"
+    params_path.write_text(json.dumps(worker_params, ensure_ascii=False), encoding="utf-8")
+
+    logf = open(log_path, "w", encoding="utf-8", buffering=1)
+    creationflags = subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0
+    proc = subprocess.Popen(
+        [sys.executable, "-m", "app.train_worker", str(params_path)],
+        cwd=str(BASE_DIR.parent),
+        stdout=logf,
+        stderr=subprocess.STDOUT,
+        creationflags=creationflags,
+    )
+    TRAIN_PROCS[run_id] = proc
+    state = TRAINING_RUNS.get(run_id, {})
+    state.update({
+        "status": "running",
+        "started_at": datetime.now(timezone.utc).isoformat(),
+        "log_path": str(log_path),
+        "pid": proc.pid,
+        "project_dir": str(project_dir),
+        "params": params,
+    })
+    TRAINING_RUNS[run_id] = state
+    threading.Thread(target=_monitor_training, args=(run_id, proc, logf), daemon=True).start()
+
+
+class TrainingRunBody(BaseModel):
+    data_yaml: str
+    base_model: str = "yolo11n.pt"
+    epochs: int = 50
+    imgsz: int = 1024
+    batch: int = 8
+    deploy_after: bool = True
+    # Kengaytirilgan parametrlar (ixtiyoriy)
+    optimizer: str = "auto"          # SGD | Adam | AdamW | auto
+    lr0: float = 0.01                # Boshlang'ich LR
+    lrf: float = 0.01                # Yakuniy LR (lr0 * lrf)
+    momentum: float = 0.937
+    weight_decay: float = 0.0005
+    warmup_epochs: float = 3.0
+    patience: int = 50               # Early stopping
+    seed: int = 0
+    cos_lr: bool = False              # Cosine LR scheduler
+    pretrained: bool = True           # False = scratch'dan
+    resume: Optional[str] = None      # Run ID dan davom ettirish
+    # Augmentation
+    hsv_h: float = 0.015
+    hsv_s: float = 0.7
+    hsv_v: float = 0.4
+    fliplr: float = 0.5
+    flipud: float = 0.0
+    scale: float = 0.5
+    mosaic: float = 1.0
+    mixup: float = 0.0
+    # Boshqalar
+    workers: int = 4
+    cache: str = "False"              # "False" | "ram" | "disk"
+    device: str = ""                  # "" auto, "cpu", "0", "0,1"
+    project_name: Optional[str] = None  # foydalanuvchi bergan nom
+
+
+@app.post("/api/training/run")
+def training_run(
+    body: TrainingRunBody,
+    _user: dict = Depends(auth_mod.require_user),
+):
+    """YOLO o'qitishni alohida subprocess'da boshlaydi. Run ID qaytaradi."""
+    if not Path(body.data_yaml).exists():
+        raise HTTPException(400, f"data.yaml topilmadi: {body.data_yaml}")
+    run_id = "tr" + datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S") + "_" + uuid.uuid4().hex[:6]
+    TRAINING_RUNS[run_id] = {"status": "queued", "queued_at": datetime.now(timezone.utc).isoformat(), "params": body.model_dump()}
+    _launch_training(run_id, body.model_dump())
+    return {"run_id": run_id, "status": "running"}
+
+
+@app.post("/api/training/stop/{run_id}")
+def training_stop(run_id: str, _user: dict = Depends(auth_mod.require_user)):
+    """Ishlab turgan training subprocess'ni to'xtatadi. last.pt saqlanib qoladi
+    (keyinroq Resume bilan davom ettirsa bo'ladi)."""
+    state = TRAINING_RUNS.get(run_id)
+    if not state:
+        raise HTTPException(404, f"Run topilmadi: {run_id}")
+    proc = TRAIN_PROCS.get(run_id)
+    if proc is None or proc.poll() is not None:
+        raise HTTPException(409, "Run hozir ishlamayapti (allaqachon tugagan)")
+    state["_stop_requested"] = True
+    _kill_proc_tree(proc.pid)
+    return {"run_id": run_id, "status": "stopping"}
+
+
+# Mavjud datasetlarni topish (data.yaml'lar)
+@app.get("/api/training/datasets")
+def training_datasets(_user: dict = Depends(auth_mod.require_user)):
+    """Mavjud data.yaml fayllarni qidiradi (foydalanuvchi tanlashi uchun)."""
+    candidates: list[dict] = []
+    search_roots = []
+    # Loyiha papkasi ostida
+    search_roots.append(BASE_DIR.parent)
+    # Lokal disklar
+    for d in ("D:/datasets", "C:/datasets", "/datasets", "/srv/datasets"):
+        if Path(d).is_dir():
+            search_roots.append(Path(d))
+    seen = set()
+    for root in search_roots:
+        if not root.is_dir():
+            continue
+        try:
+            for yml in list(root.glob("**/data.yaml"))[:200]:
+                if str(yml) in seen:
+                    continue
+                seen.add(str(yml))
+                try:
+                    size = yml.stat().st_size
+                    parent = yml.parent
+                    train_n = len(list((parent / "images/train").glob("*"))) if (parent / "images/train").is_dir() else 0
+                    val_n = len(list((parent / "images/val").glob("*"))) if (parent / "images/val").is_dir() else 0
+                except Exception:
+                    train_n = val_n = size = 0
+                candidates.append({
+                    "yaml": str(yml),
+                    "dir": str(yml.parent),
+                    "train_count": train_n,
+                    "val_count": val_n,
+                    "size_bytes": size,
+                })
+        except Exception:
+            continue
+    candidates.sort(key=lambda x: -(x["train_count"] + x["val_count"]))
+    return {"datasets": candidates[:50]}
+
+
+# Mavjud base model fayllarini ro'yxati (foydalanuvchi tanlashi uchun)
+@app.get("/api/training/base_models")
+def training_base_models(_user: dict = Depends(auth_mod.require_user)):
+    """Ultralytics tomonidan tanish base modellar + lokal trained_*'lar."""
+    suggested = [
+        {"name": "yolo11n.pt", "label": "YOLO11 Nano — eng yengil", "size_hint_mb": 5},
+        {"name": "yolo11s.pt", "label": "YOLO11 Small", "size_hint_mb": 20},
+        {"name": "yolo11m.pt", "label": "YOLO11 Medium", "size_hint_mb": 40},
+        {"name": "yolo11l.pt", "label": "YOLO11 Large", "size_hint_mb": 50},
+        {"name": "yolo11x.pt", "label": "YOLO11 Extra — eng kuchli", "size_hint_mb": 120},
+        {"name": "yolov10n.pt", "label": "YOLOv10 Nano", "size_hint_mb": 5},
+        {"name": "yolov10x.pt", "label": "YOLOv10 Extra", "size_hint_mb": 64},
+        {"name": "yolov9c.pt", "label": "YOLOv9 Compact", "size_hint_mb": 50},
+        {"name": "yolov9e.pt", "label": "YOLOv9 Extra", "size_hint_mb": 110},
+        {"name": "yolov8n.pt", "label": "YOLOv8 Nano (klassik)", "size_hint_mb": 6},
+        {"name": "yolov8x.pt", "label": "YOLOv8 Extra", "size_hint_mb": 130},
+    ]
+    # Lokal modellar — fine-tune uchun
+    local_pts = []
+    for m in inf.list_models():
+        local_pts.append({
+            "name": m["name"],
+            "label": f"Lokal: {m['name']} ({m['size_bytes']/1e6:.1f} MB)",
+            "is_local": True,
+            "path": str(inf.MODELS_DIR / m["name"]),
+        })
+    return {"suggested": suggested, "local": local_pts}
+
+
+@app.get("/api/training/status/{run_id}")
+def training_status(run_id: str, tail: int = 200, _user: dict = Depends(auth_mod.require_user)):
+    state = dict(TRAINING_RUNS.get(run_id) or {})
+    if not state:
+        raise HTTPException(404, f"Run topilmadi: {run_id}")
+    state.pop("_stop_requested", None)
+    proc = TRAIN_PROCS.get(run_id)
+    state["is_alive"] = bool(proc and proc.poll() is None)
+    # Ishlab turgan run uchun live oxirgi metrikalarni results.csv'dan o'qib qo'shamiz
+    if state.get("status") == "running":
+        live = _read_results_csv(Path(state.get("project_dir") or (BASE_DIR / "training_runs" / run_id)))
+        if live:
+            state["last_metrics"] = live[-1]
+            state["epochs_done"] = len(live)
+    log_lines: list[str] = []
+    log_path = state.get("log_path")
+    if log_path and Path(log_path).exists():
+        try:
+            content = Path(log_path).read_text(encoding="utf-8", errors="replace")
+            log_lines = content.splitlines()[-max(20, min(2000, tail)):]
+        except Exception:
+            pass
+    return {"run_id": run_id, **state, "log_tail": log_lines}
+
+
+@app.get("/api/training/runs")
+def training_list_runs(_user: dict = Depends(auth_mod.require_user)):
+    return {"runs": [{"run_id": k, **v} for k, v in sorted(TRAINING_RUNS.items(), reverse=True)]}
+
+
+def _read_results_csv(project_dir: Path) -> list[dict]:
+    """Ultralytics results.csv'ni per-epoch qatorlar (dict) ro'yxatiga aylantiradi.
+    Raqamli qiymatlar float'ga o'giriladi — grafiklar uchun."""
+    csv_path = next(iter(project_dir.rglob("results.csv")), None)
+    if not csv_path or not csv_path.exists():
+        return []
+    rows: list[dict] = []
+    try:
+        lines = csv_path.read_text(encoding="utf-8").splitlines()
+        if len(lines) < 2:
+            return []
+        headers = [h.strip() for h in lines[0].split(",")]
+        for ln in lines[1:]:
+            vals = [v.strip() for v in ln.split(",")]
+            if len(vals) != len(headers):
+                continue
+            row: dict = {}
+            for h, v in zip(headers, vals):
+                try:
+                    row[h] = float(v)
+                except ValueError:
+                    row[h] = v
+            rows.append(row)
+    except Exception:
+        return []
+    return rows
+
+
+@app.get("/api/training/metrics/{run_id}")
+def training_metrics(run_id: str, _user: dict = Depends(auth_mod.require_user)):
+    """Jonli grafiklar uchun: har epochdagi loss/mAP/precision/recall qatorlari."""
+    safe = re.sub(r"[^A-Za-z0-9_.-]", "", run_id)
+    project_dir = BASE_DIR / "training_runs" / safe
+    rows = _read_results_csv(project_dir)
+    return {"run_id": safe, "epochs": len(rows), "rows": rows}
+
+
+@app.get("/api/training/validate")
+def training_validate(
+    yaml_path: str = Query(..., alias="yaml"),
+    _user: dict = Depends(auth_mod.require_user),
+):
+    """data.yaml tekshiruvi: rasm soni, class taqsimoti, rasm↔label mosligi,
+    bo'sh/buzuq fayllar ogohlantirishi."""
+    yp = Path(yaml_path)
+    if not yp.exists():
+        raise HTTPException(404, f"data.yaml topilmadi: {yaml_path}")
+    import yaml as _yaml
+    try:
+        data = _yaml.safe_load(yp.read_text(encoding="utf-8")) or {}
+    except Exception as e:
+        raise HTTPException(400, f"data.yaml o'qib bo'lmadi: {e}")
+
+    ydir = yp.parent
+    base = data.get("path")
+    if base:
+        base = Path(base)
+        base = base if base.is_absolute() else (ydir / base)
+    else:
+        base = ydir
+
+    names_raw = data.get("names")
+    names: dict = {}
+    if isinstance(names_raw, dict):
+        names = {int(k): str(v) for k, v in names_raw.items()}
+    elif isinstance(names_raw, list):
+        names = {i: str(v) for i, v in enumerate(names_raw)}
+    nc = int(data.get("nc") or len(names) or 0)
+
+    IMG_EXT = {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff", ".webp"}
+
+    def split_info(split_key: str):
+        rel = data.get(split_key)
+        if not rel:
+            return None
+        if isinstance(rel, list):
+            rel = rel[0] if rel else None
+        if not rel:
+            return None
+        sp = Path(rel)
+        img_dir = sp if sp.is_absolute() else (base / sp)
+        info = {
+            "path": str(img_dir), "exists": img_dir.is_dir(),
+            "images": 0, "labels": 0, "missing_labels": 0,
+            "orphan_labels": 0, "empty_images": 0, "class_counts": {},
+        }
+        if not img_dir.is_dir():
+            return info
+        # YOLO konvensiyasi: images/ -> labels/
+        lbl_dir = Path(str(img_dir).replace("images", "labels", 1))
+        imgs = [p for p in img_dir.rglob("*") if p.suffix.lower() in IMG_EXT]
+        info["images"] = len(imgs)
+        img_stems = set()
+        for p in imgs:
+            img_stems.add(p.stem)
+            try:
+                if p.stat().st_size == 0:
+                    info["empty_images"] += 1
+            except Exception:
+                pass
+        lbl_files = list(lbl_dir.rglob("*.txt")) if lbl_dir.is_dir() else []
+        info["labels"] = len(lbl_files)
+        lbl_stems = set()
+        cc: dict = {}
+        for lf in lbl_files:
+            lbl_stems.add(lf.stem)
+            try:
+                for line in lf.read_text(encoding="utf-8").splitlines():
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        cid = int(float(line.split()[0]))
+                    except (ValueError, IndexError):
+                        continue
+                    cc[cid] = cc.get(cid, 0) + 1
+            except Exception:
+                continue
+        info["class_counts"] = {names.get(k, str(k)): v for k, v in sorted(cc.items())}
+        info["missing_labels"] = len(img_stems - lbl_stems)
+        info["orphan_labels"] = len(lbl_stems - img_stems)
+        return info
+
+    return {"yaml": str(yp), "names": names, "nc": nc,
+            "train": split_info("train"), "val": split_info("val")}
+
+
+@app.get("/api/system/gpu")
+def system_gpu(_user: dict = Depends(auth_mod.require_user)):
+    """nvidia-smi orqali GPU holati: VRAM band/jami, utilization, harorat.
+    Hamda torch CUDA'ni ko'ra oladimi — training GPU'da ketishini bildiradi."""
+    out: dict = {"available": False, "gpus": []}
+    try:
+        r = subprocess.run(
+            ["nvidia-smi",
+             "--query-gpu=index,name,memory.total,memory.used,memory.free,utilization.gpu,temperature.gpu",
+             "--format=csv,noheader,nounits"],
+            capture_output=True, text=True, timeout=5,
+        )
+        if r.returncode == 0:
+            for line in r.stdout.strip().splitlines():
+                parts = [p.strip() for p in line.split(",")]
+                if len(parts) >= 7:
+                    out["gpus"].append({
+                        "index": int(parts[0]), "name": parts[1],
+                        "mem_total_mb": float(parts[2]), "mem_used_mb": float(parts[3]),
+                        "mem_free_mb": float(parts[4]), "util_pct": float(parts[5]),
+                        "temp_c": float(parts[6]),
+                    })
+            out["available"] = bool(out["gpus"])
+    except Exception as e:
+        out["error"] = str(e)
+    try:
+        import torch
+        out["torch_cuda"] = bool(torch.cuda.is_available())
+        out["torch_version"] = torch.__version__
+    except Exception:
+        out["torch_cuda"] = False
+    return out
+
+
+# --------------------------------------------------------------------------- #
+# Model management dashboard — statistika, delete, versionlar                  #
+# --------------------------------------------------------------------------- #
+@app.get("/api/models/stats")
+def models_stats(_user: dict = Depends(auth_mod.require_user)):
+    """Har model uchun: hajm, qachon qo'shilgan, nechta annotation chiqargan."""
+    from datetime import datetime as _dt
+    models = inf.list_models()
+    # Annotation fayllaridan har model ishlatilgan sonni hisoblaymiz
+    usage: dict = {}
+    for ann_path in ANNOT_DIR.glob("*.json"):
+        try:
+            data = json.loads(ann_path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        for a in data.get("annotations") or []:
+            cb = str(a.get("created_by", ""))
+            if cb.startswith("ai:"):
+                model_name = cb[3:]
+                usage[model_name] = usage.get(model_name, 0) + 1
+    out = []
+    for m in models:
+        p = inf.MODELS_DIR / m["name"]
+        try:
+            mtime = p.stat().st_mtime
+            added = _dt.fromtimestamp(mtime, tz=timezone.utc).isoformat()
+        except Exception:
+            added = None
+        is_trained = m["name"].startswith("trained_")
+        out.append({
+            "name": m["name"],
+            "size_bytes": m["size_bytes"],
+            "size_mb": round(m["size_bytes"] / 1e6, 1),
+            "added_at": added,
+            "annotations_produced": usage.get(m["name"], 0),
+            "is_trained_locally": is_trained,
+            "is_deletable": is_trained,  # faqat lokal o'qitilganlar o'chiriladi
+        })
+    out.sort(key=lambda x: (-x["annotations_produced"], x["name"]))
+    return {"models": out, "models_dir": str(inf.MODELS_DIR)}
+
+
+@app.delete("/api/models/{name}")
+def delete_model(name: str, _user: dict = Depends(auth_mod.require_user)):
+    """Lokal o'qitilgan modelni o'chirish. Built-in (digitaleye/yolov8 va h.k.) o'chmaydi."""
+    safe = Path(name).name
+    if not safe.endswith(".pt"):
+        safe += ".pt"
+    if not safe.startswith("trained_"):
+        raise HTTPException(403, "Faqat lokal o'qitilgan (trained_*) modellarni o'chirish mumkin")
+    p = inf.MODELS_DIR / safe
+    if not p.exists():
+        raise HTTPException(404, f"Model topilmadi: {safe}")
+    try:
+        p.unlink()
+    except Exception as e:
+        raise HTTPException(500, f"O'chirib bo'lmadi: {e}")
+    # Inference cache'ni tozalash
+    try:
+        if str(p) in inf._model_cache:
+            with inf._cache_lock:
+                inf._model_cache.pop(str(p), None)
+    except Exception:
+        pass
+    return {"deleted": safe}
+
+
+# --------------------------------------------------------------------------- #
+# Active learning eslatmasi — qancha "modifikatsiyalangan AI annotation" bor   #
+# --------------------------------------------------------------------------- #
+ACTIVE_LEARNING_THRESHOLD = int(os.environ.get("ACTIVE_LEARNING_THRESHOLD", "50") or "50")
+
+
+@app.get("/api/training/suggestion")
+def training_suggestion(_user: dict = Depends(auth_mod.require_user)):
+    """AI'dan farqli yoki tasdiqlangan annotation'lar sonini sanab, retrain
+    kerakligi to'g'risida tavsiya beradi."""
+    edited = 0
+    approved = 0
+    human = 0
+    total = 0
+    for ann_path in ANNOT_DIR.glob("*.json"):
+        try:
+            data = json.loads(ann_path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        for a in data.get("annotations") or []:
+            total += 1
+            st = str(a.get("status", ""))
+            cb = str(a.get("created_by", ""))
+            if cb.startswith("ai:"):
+                if st in ("edited", "ai_review", "ai_accepted"):
+                    edited += 1
+                elif st in ("approved", "submitted"):
+                    approved += 1
+            else:
+                human += 1
+    eligible = human + edited + approved
+    should = eligible >= ACTIVE_LEARNING_THRESHOLD
+    return {
+        "total_annotations": total,
+        "human_annotations": human,
+        "edited_ai": edited,
+        "approved_ai": approved,
+        "eligible_for_training": eligible,
+        "threshold": ACTIVE_LEARNING_THRESHOLD,
+        "should_retrain": should,
+        "message": (
+            f"✓ Yangi modelni o'qitishga vaqt keldi ({eligible} ta yangi annotation)"
+            if should else
+            f"Yana {ACTIVE_LEARNING_THRESHOLD - eligible} ta annotation kerak"
+        ),
+    }
+
+
+class TrainingPrepareBody(BaseModel):
+    destination: str
+    target_size: int = 1024
+    val_frac: float = 0.15
+    include_ai: bool = False                # AI tomonidan yaratilgan annotation ham qo'shiladimi
+    statuses: Optional[list[str]] = None    # filtr (None = barchasi)
+    class_list: Optional[list[str]] = None  # None = annotation label'laridan avto
+    image_format: str = "png"               # "png" | "jpg"
+    seed: int = 42
+    zip_after: bool = False                 # ZIP qilib ko'chirish uchun tayyorlash
+
+
+def _polygon_to_bbox_pts(points: list[list[float]]) -> tuple[float, float, float, float]:
+    xs = [p[0] for p in points]
+    ys = [p[1] for p in points]
+    x0, x1 = max(0.0, min(xs)), min(1.0, max(xs))
+    y0, y1 = max(0.0, min(ys)), min(1.0, max(ys))
+    return x0, y0, max(0.0, x1 - x0), max(0.0, y1 - y0)
+
+
+@app.post("/api/training/prepare")
+def training_prepare(
+    body: TrainingPrepareBody,
+    _user: dict = Depends(auth_mod.require_user),
+):
+    """Annotation'lardan YOLO (Ultralytics) dataset yaratadi:
+        <dest>/
+            images/{train,val}/<id>.png
+            labels/{train,val}/<id>.txt
+            data.yaml
+    """
+    import random
+    import shutil
+    import zipfile
+
+    dest_str = (body.destination or "").strip()
+    if not dest_str:
+        raise HTTPException(400, "destination kerak")
+    dest = Path(dest_str)
+    forbidden_starts = [r"C:\Windows", r"C:\Program Files", "/etc", "/usr", "/bin", "/sbin", "/sys", "/proc"]
+    if any(str(dest).lower().startswith(x.lower()) for x in forbidden_starts):
+        raise HTTPException(400, f"Bu papkaga yozish taqiqlangan: {dest}")
+    try:
+        dest.mkdir(parents=True, exist_ok=True)
+    except Exception as e:
+        raise HTTPException(400, f"Papka yaratib bo'lmadi: {e}")
+
+    target_size = max(256, min(4096, int(body.target_size)))
+    val_frac = max(0.0, min(0.5, float(body.val_frac)))
+    img_ext = "jpg" if body.image_format.lower() in ("jpg", "jpeg") else "png"
+
+    # 1-bosqich: annotation fayllarni o'qib, tasniflash
+    items: list[dict] = []
+    label_set: set[str] = set()
+    for ann_path in sorted(ANNOT_DIR.glob("upload__*.json")):
+        file_id = ann_path.stem.replace("upload__", "", 1)
+        dcm = UPLOAD_DIR / f"{file_id}.dcm"
+        if not dcm.exists():
+            continue
+        try:
+            data = json.loads(ann_path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        anns = data.get("annotations") or []
+        # Filtrlar
+        kept = []
+        for a in anns:
+            cb = str(a.get("created_by", ""))
+            if not body.include_ai and cb.startswith("ai:"):
+                continue
+            if body.statuses and a.get("status") not in body.statuses:
+                continue
+            t = a.get("type")
+            if t == "bbox" and a.get("bbox"):
+                bx, by, bw, bh = a["bbox"][:4]
+                kept.append({"label": str(a.get("label", "") or "lesion"), "bbox": [bx, by, bw, bh]})
+                label_set.add(kept[-1]["label"])
+            elif t == "polygon" and a.get("points") and len(a["points"]) >= 3:
+                bx, by, bw, bh = _polygon_to_bbox_pts(a["points"])
+                kept.append({"label": str(a.get("label", "") or "lesion"), "bbox": [bx, by, bw, bh]})
+                label_set.add(kept[-1]["label"])
+        if not kept:
+            continue
+        # Study guruhi uchun PatientID + StudyUID o'qiymiz
+        try:
+            ds = pydicom.dcmread(str(dcm), stop_before_pixels=True, force=True)
+            pid = str(getattr(ds, "PatientID", "") or "")
+            suid = str(getattr(ds, "StudyInstanceUID", "") or "")
+        except Exception:
+            pid = suid = ""
+        group_key = pid or suid or file_id
+        items.append({"file_id": file_id, "dcm": dcm, "annotations": kept, "group": group_key})
+
+    if not items:
+        raise HTTPException(400, "Annotation bo'lgan fayl topilmadi (yoki filtr juda tor)")
+
+    # 2-bosqich: classlar tartibi
+    if body.class_list:
+        classes = list(dict.fromkeys(body.class_list))
+    else:
+        classes = sorted(label_set)
+    cls_to_id = {name: i for i, name in enumerate(classes)}
+
+    # 3-bosqich: patient-level train/val split
+    rng = random.Random(body.seed)
+    groups = sorted({it["group"] for it in items})
+    rng.shuffle(groups)
+    n_val_groups = max(1, int(round(len(groups) * val_frac))) if val_frac > 0 else 0
+    val_groups = set(groups[:n_val_groups])
+
+    # 4-bosqich: papka tuzilmasi
+    for sub in ("images/train", "images/val", "labels/train", "labels/val"):
+        (dest / sub).mkdir(parents=True, exist_ok=True)
+
+    counts = {"train_imgs": 0, "val_imgs": 0, "train_lbls": 0, "val_lbls": 0, "skipped": 0}
+
+    # 5-bosqich: har bir item ni qayta ishlash
+    for it in items:
+        split = "val" if it["group"] in val_groups else "train"
+        try:
+            png_bytes = render_frame_png(it["dcm"], frame=0, max_dim=target_size)
+        except Exception:
+            counts["skipped"] += 1
+            continue
+        # Agar JPG kerak bo'lsa, qayta kodlaymiz
+        img_bytes = png_bytes
+        if img_ext == "jpg":
+            try:
+                from PIL import Image
+                im = Image.open(io.BytesIO(png_bytes))
+                if im.mode != "RGB":
+                    im = im.convert("RGB")
+                buf = io.BytesIO()
+                im.save(buf, format="JPEG", quality=92)
+                img_bytes = buf.getvalue()
+            except Exception:
+                img_ext = "png"  # fallback
+
+        img_path = dest / f"images/{split}/{it['file_id']}.{img_ext}"
+        lbl_path = dest / f"labels/{split}/{it['file_id']}.txt"
+        img_path.write_bytes(img_bytes)
+        if split == "train":
+            counts["train_imgs"] += 1
+        else:
+            counts["val_imgs"] += 1
+
+        # YOLO label faylini yozish: <cls> <cx> <cy> <w> <h> (normallashtirilgan)
+        n_lines = 0
+        with lbl_path.open("w", encoding="utf-8") as f:
+            for a in it["annotations"]:
+                lbl_name = a["label"]
+                cls_id = cls_to_id.get(lbl_name)
+                if cls_id is None:
+                    continue
+                bx, by, bw, bh = a["bbox"]
+                cx = bx + bw / 2.0
+                cy = by + bh / 2.0
+                cx = max(0.0, min(1.0, cx)); cy = max(0.0, min(1.0, cy))
+                bw = max(0.0, min(1.0, bw)); bh = max(0.0, min(1.0, bh))
+                if bw <= 0 or bh <= 0:
+                    continue
+                f.write(f"{cls_id} {cx:.6f} {cy:.6f} {bw:.6f} {bh:.6f}\n")
+                n_lines += 1
+        if split == "train":
+            counts["train_lbls"] += n_lines
+        else:
+            counts["val_lbls"] += n_lines
+
+    # 6-bosqich: data.yaml
+    yaml_path = dest / "data.yaml"
+    yaml_lines = [
+        f"# MAMOGRAF training dataset — {datetime.now(timezone.utc).isoformat()}",
+        f"path: {dest.as_posix()}",
+        "train: images/train",
+        "val: images/val",
+        f"nc: {len(classes)}",
+        "names:",
+    ]
+    for i, n in enumerate(classes):
+        yaml_lines.append(f"  {i}: {n}")
+    yaml_path.write_text("\n".join(yaml_lines) + "\n", encoding="utf-8")
+
+    # Train buyrug'i ko'rsatmasi
+    readme = dest / "README_TRAIN.md"
+    readme.write_text(
+        "# YOLO training dataset (MAMOGRAF)\n\n"
+        f"Yaratilgan: {datetime.now(timezone.utc).isoformat()}\n"
+        f"Klasslar ({len(classes)}): {classes}\n\n"
+        "## Ultralytics bilan train:\n\n"
+        "```bash\n"
+        "pip install ultralytics\n"
+        "yolo task=detect mode=train model=yolo11n.pt "
+        f"data={(yaml_path).as_posix()} epochs=100 imgsz={target_size} batch=8\n"
+        "```\n\n"
+        "## Yoki Python:\n\n"
+        "```python\n"
+        "from ultralytics import YOLO\n"
+        "m = YOLO('yolo11n.pt')\n"
+        f"m.train(data=r'{yaml_path}', epochs=100, imgsz={target_size}, batch=8)\n"
+        "```\n",
+        encoding="utf-8",
+    )
+
+    zip_path = None
+    if body.zip_after:
+        zip_path = dest.parent / (dest.name + ".zip")
+        with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+            for p in dest.rglob("*"):
+                if p.is_file():
+                    zf.write(p, p.relative_to(dest.parent))
+
+    return {
+        "destination": str(dest),
+        "data_yaml": str(yaml_path),
+        "readme": str(readme),
+        "zip": str(zip_path) if zip_path else None,
+        "classes": classes,
+        "items_total": len(items),
+        "val_groups": n_val_groups,
+        "total_groups": len(groups),
+        **counts,
+    }
+
+
+# (C1) 4-view side-by-side: shu fayl bilan bir Study'dagi barcha proyeksiyalar
+@app.get("/api/files/{file_id}/study_views")
+def study_views(file_id: str):
+    p = UPLOAD_DIR / f"{file_id}.dcm"
+    if not p.exists():
+        raise HTTPException(404)
+    try:
+        ds = pydicom.dcmread(str(p), stop_before_pixels=True, force=True)
+    except Exception as e:
+        raise HTTPException(500, f"read failed: {e}")
+    study_uid = str(getattr(ds, "StudyInstanceUID", "") or "")
+    if not study_uid:
+        return {"views": [], "study_uid": ""}
+    out = []
+    for f in UPLOAD_DIR.glob("*.dcm"):
+        try:
+            ds2 = pydicom.dcmread(str(f), stop_before_pixels=True, force=True)
+        except Exception:
+            continue
+        if str(getattr(ds2, "StudyInstanceUID", "") or "") != study_uid:
+            continue
+        view = str(getattr(ds2, "ViewPosition", "") or "").upper()
+        lat = str(getattr(ds2, "ImageLaterality", "") or "").upper()
+        out.append({
+            "id": f.stem,
+            "view": view,
+            "laterality": lat,
+            "key": f"{lat}{view}",   # mas. LCC, RCC, LMLO, RMLO
+            "kind": "upload",
+        })
+    # Standart mammografiya tartibi
+    ORDER = ["LCC", "RCC", "LMLO", "RMLO"]
+    def sort_key(v):
+        try:
+            return (ORDER.index(v["key"]), v["id"])
+        except ValueError:
+            return (99, v["id"])
+    out.sort(key=sort_key)
+    return {"views": out, "study_uid": study_uid}
 
 
 @app.get("/api/files/{file_id}/image")
@@ -1881,6 +2941,78 @@ def get_radiomics_csv(
     )
 
 
+@app.get("/api/stats/local_dicom")
+def stats_local_dicom(_user: dict = Depends(auth_mod.require_user)):
+    """LOCAL_DICOM_ROOT papkasidagi DICOM fayl va noyob bemorlar soni.
+    Natija 10 daqiqaga keshlanadi (skanerlash juda sekin)."""
+    import time
+    cached = _cache_get("local_dicom_stats")
+    if cached is not None:
+        return cached
+
+    if LOCAL_ROOT is None or not LOCAL_ROOT.is_dir():
+        out = {
+            "enabled": False,
+            "root": LOCAL_ROOT_ENV or "(o'rnatilmagan)",
+            "dicom_files": 0,
+            "unique_patients": 0,
+            "scan_duration_s": 0.0,
+            "message": "LOCAL_DICOM_ROOT env-var sozlanmagan yoki papka mavjud emas",
+        }
+        _cache_set("local_dicom_stats", out)
+        return out
+
+    t0 = time.time()
+    # 1. Fayllarni sanash (tez)
+    dcm_files = []
+    for ext in ("*.dcm", "*.cdcm", "*.DCM"):
+        dcm_files.extend(LOCAL_ROOT.rglob(ext))
+    n_files = len(dcm_files)
+
+    # 2. Bemorlar (PatientID) — har faylni o'qib, header'dan olamiz
+    # PatientID'lar to'plamida unique sanash. Katta fayllar — header o'qish tez,
+    # ammo 5000+ fayl bo'lsa 10-30 sek bo'lishi mumkin.
+    patient_ids: set[str] = set()
+    by_modality: dict[str, int] = {}
+    errors = 0
+    for f in dcm_files:
+        try:
+            ds = pydicom.dcmread(str(f), stop_before_pixels=True, force=True, specific_tags=["PatientID", "Modality"])
+            pid = str(getattr(ds, "PatientID", "") or "").strip()
+            if pid:
+                patient_ids.add(pid)
+            mod = str(getattr(ds, "Modality", "") or "").strip() or "UNKNOWN"
+            by_modality[mod] = by_modality.get(mod, 0) + 1
+        except Exception:
+            errors += 1
+    dt = time.time() - t0
+
+    # 3. Yuqori darajadagi papkalar (foydali ko'rsatkich)
+    top_dirs = []
+    try:
+        for d in sorted(LOCAL_ROOT.iterdir()):
+            if d.is_dir():
+                n = sum(1 for _ in d.rglob("*.dcm")) + sum(1 for _ in d.rglob("*.cdcm"))
+                top_dirs.append({"name": d.name, "dicom_count": n})
+        top_dirs.sort(key=lambda x: -x["dicom_count"])
+        top_dirs = top_dirs[:20]
+    except Exception:
+        top_dirs = []
+
+    out = {
+        "enabled": True,
+        "root": str(LOCAL_ROOT),
+        "dicom_files": n_files,
+        "unique_patients": len(patient_ids),
+        "by_modality": [{"modality": k, "count": v} for k, v in sorted(by_modality.items(), key=lambda x: -x[1])],
+        "top_subdirs": top_dirs,
+        "errors": errors,
+        "scan_duration_s": round(dt, 2),
+    }
+    _cache_set("local_dicom_stats", out)
+    return out
+
+
 @app.get("/api/stats/overview")
 def stats_overview(_admin: dict = Depends(auth_mod.require_role("admin", "reviewer"))):
     cached = _cache_get("stats")
@@ -2775,6 +3907,260 @@ async def inference_batch(
             "saved": body.auto_save,
         })
     return {"ok": True, "results": results, "count": len(results)}
+
+
+# --------------------------------------------------------------------------- #
+# (A3) Uncertainty heatmap — modellar kelishmagan joyni ko'rsatadi              #
+# --------------------------------------------------------------------------- #
+def _compute_uncertainty_map(
+    per_model_dets: list[list[dict]],
+    image_size_wh: tuple[int, int],
+) -> "tuple[object, dict]":
+    """Har piksel uchun noaniqlik = ovoz qarama-qarshiligi × o'rtacha ishonch.
+    Tushuntirish:
+      vote(p) = (necha model shu nuqtada lezyon ko'radi) / N
+      disagree(p) = 4 · vote · (1 - vote)        — peak vote=0.5 da
+      mean_conf(p) = ovoz bergan modellarning ishonchini o'rtachasi
+      heat(p) = disagree · mean_conf             — ikkalasi yuqori bo'lsa qizil
+    """
+    import numpy as np
+    W, H = image_size_wh
+    n_models = max(1, len(per_model_dets))
+    info = {"n_models": n_models, "max_heat": 0.0, "nonzero_pct": 0.0}
+    if n_models < 2:
+        return np.zeros((H, W), dtype=np.float32), info
+
+    vote = np.zeros((H, W), dtype=np.float32)
+    conf_sum = np.zeros((H, W), dtype=np.float32)
+
+    for dets in per_model_dets:
+        mask = np.zeros((H, W), dtype=bool)
+        cmap = np.zeros((H, W), dtype=np.float32)
+        for d in dets:
+            bbox = d.get("bbox") or [0, 0, 0, 0]
+            if len(bbox) < 4:
+                continue
+            # bbox normallashtirilgan [x,y,w,h] (0..1)
+            x = int(round(float(bbox[0]) * W))
+            y = int(round(float(bbox[1]) * H))
+            w = int(round(float(bbox[2]) * W))
+            h = int(round(float(bbox[3]) * H))
+            x2 = max(0, min(W, x + w))
+            y2 = max(0, min(H, y + h))
+            x = max(0, min(W, x))
+            y = max(0, min(H, y))
+            if x2 <= x or y2 <= y:
+                continue
+            mask[y:y2, x:x2] = True
+            c = float(d.get("confidence", 0.0))
+            cmap[y:y2, x:x2] = np.maximum(cmap[y:y2, x:x2], c)
+        vote += mask.astype(np.float32)
+        conf_sum += cmap
+
+    v_norm = vote / float(n_models)
+    disagreement = 4.0 * v_norm * (1.0 - v_norm)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        mean_conf = np.where(vote > 0, conf_sum / vote, 0.0)
+    heat = (disagreement * mean_conf).astype(np.float32)
+
+    info["max_heat"] = float(heat.max())
+    info["nonzero_pct"] = float((heat > 0.01).mean() * 100.0)
+    return heat, info
+
+
+def _render_uncertainty_png(heat) -> bytes:
+    """heat (HxW float32) -> RGBA PNG: sariq->qizil gradient, alpha = heat."""
+    import numpy as np
+    from PIL import Image
+    H, W = heat.shape
+    if heat.max() > 0:
+        h = heat / heat.max()
+    else:
+        h = heat
+    h = np.clip(h, 0.0, 1.0) ** 0.7  # gamma — yuqori qiymatlarni ko'rsatish uchun
+    rgba = np.zeros((H, W, 4), dtype=np.uint8)
+    rgba[..., 0] = 255                          # R doim 255
+    rgba[..., 1] = (255 * (1.0 - h)).astype(np.uint8)  # G susayadi -> qizillashadi
+    rgba[..., 2] = 0                            # B = 0
+    rgba[..., 3] = (200 * h).astype(np.uint8)   # alpha = heat
+    img = Image.fromarray(rgba, mode="RGBA")
+    buf = io.BytesIO()
+    img.save(buf, format="PNG", optimize=True)
+    return buf.getvalue()
+
+
+@app.post("/api/inference/uncertainty")
+@limiter.limit("10/minute")
+def inference_uncertainty(
+    request: Request,
+    body: InferenceBody,
+    _user: dict = Depends(auth_mod.require_user),
+):
+    """Bir nechta modelni ishga tushirib, noaniqlik xaritasini PNG sifatida qaytaradi.
+    body.models — solishtirish uchun modellar ro'yxati (kamida 2 ta). Bo'sh bo'lsa — barchasi.
+    """
+    _validate_source(body.source)
+    _validate_ref(body.source, body.ref)
+
+    if body.source == "upload":
+        path = UPLOAD_DIR / f"{body.ref}.dcm"
+    else:
+        path = _resolve_local(body.ref)
+
+    try:
+        png_bytes = render_frame_png(
+            path, frame=body.frame, wc=body.wc, ww=body.ww, max_dim=2048
+        )
+    except Exception as e:
+        raise HTTPException(500, f"render failed: {e}")
+
+    model_names = body.models or [m["name"] for m in inf.list_models()]
+    if len(model_names) < 2:
+        raise HTTPException(400, "Uncertainty kamida 2 ta modelni talab qiladi")
+
+    per_model_dets: list[list[dict]] = []
+    image_size_wh: Optional[tuple[int, int]] = None
+    used_models: list[str] = []
+    failed: list[str] = []
+    for m in model_names:
+        try:
+            res = inf.infer_png(
+                png_bytes, model_name=m,
+                conf=body.conf, iou=body.iou, imgsz=body.imgsz, tta=body.tta,
+            )
+        except Exception:
+            failed.append(m)
+            continue
+        per_model_dets.append(res.get("detections", []) or [])
+        used_models.append(m)
+        if image_size_wh is None:
+            sz = res.get("image_size") or [0, 0]
+            if len(sz) >= 2 and sz[0] > 0 and sz[1] > 0:
+                image_size_wh = (int(sz[0]), int(sz[1]))
+
+    if len(per_model_dets) < 2 or image_size_wh is None:
+        raise HTTPException(503, f"Yetarli model ishlamadi (used={used_models}, failed={failed})")
+
+    heat, info = _compute_uncertainty_map(per_model_dets, image_size_wh)
+    png = _render_uncertainty_png(heat)
+
+    headers = {
+        "X-Uncertainty-Models": ",".join(used_models),
+        "X-Uncertainty-Failed": ",".join(failed),
+        "X-Uncertainty-MaxHeat": f"{info['max_heat']:.4f}",
+        "X-Uncertainty-NonzeroPct": f"{info['nonzero_pct']:.2f}",
+        "X-Uncertainty-ImageW": str(image_size_wh[0]),
+        "X-Uncertainty-ImageH": str(image_size_wh[1]),
+    }
+    return StreamingResponse(io.BytesIO(png), media_type="image/png", headers=headers)
+
+
+# --------------------------------------------------------------------------- #
+# (A4) Smart-click segmentation — bir bosish bilan polygon                      #
+# --------------------------------------------------------------------------- #
+class SmartClickBody(BaseModel):
+    source: str
+    ref: str
+    frame: int = 0
+    x: float       # normallashtirilgan 0..1
+    y: float       # normallashtirilgan 0..1
+    wc: Optional[float] = None
+    ww: Optional[float] = None
+    tolerance: int = 25       # intensivlik chegaralari (0..255)
+    max_area_frac: float = 0.15  # rasm yuzasidan ko'pi tashlanadi
+
+
+@app.post("/api/inference/smart_click")
+@limiter.limit("60/minute")
+def inference_smart_click(
+    request: Request,
+    body: SmartClickBody,
+    _user: dict = Depends(auth_mod.require_user),
+):
+    """OpenCV asosida flood-fill + kontur soddalashtirish.
+    Bemorning bosgan nuqtasi atrofidagi o'xshash intensivlikdagi sohani topib,
+    polygon nuqtalarini (normallashtirilgan) qaytaradi."""
+    import numpy as np
+    import cv2
+
+    _validate_source(body.source)
+    _validate_ref(body.source, body.ref)
+    if not (0.0 <= body.x <= 1.0 and 0.0 <= body.y <= 1.0):
+        raise HTTPException(400, "x, y normallashtirilgan 0..1 bo'lishi kerak")
+
+    if body.source == "upload":
+        path = UPLOAD_DIR / f"{body.ref}.dcm"
+    else:
+        path = _resolve_local(body.ref)
+
+    try:
+        png_bytes = render_frame_png(path, frame=body.frame, wc=body.wc, ww=body.ww, max_dim=2048)
+    except Exception as e:
+        raise HTTPException(500, f"render failed: {e}")
+
+    arr = np.frombuffer(png_bytes, dtype=np.uint8)
+    img = cv2.imdecode(arr, cv2.IMREAD_GRAYSCALE)
+    if img is None:
+        raise HTTPException(500, "Image decode failed")
+    H, W = img.shape[:2]
+    px = int(round(body.x * (W - 1)))
+    py = int(round(body.y * (H - 1)))
+    px = max(0, min(W - 1, px))
+    py = max(0, min(H - 1, py))
+
+    # Flood fill maska
+    mask = np.zeros((H + 2, W + 2), dtype=np.uint8)
+    tol = int(max(1, min(120, body.tolerance)))
+    flags = 4 | cv2.FLOODFILL_FIXED_RANGE | (255 << 8)
+    try:
+        cv2.floodFill(img.copy(), mask, (px, py), 0, loDiff=tol, upDiff=tol, flags=flags)
+    except Exception as e:
+        raise HTTPException(500, f"floodFill failed: {e}")
+    region = mask[1:-1, 1:-1]
+    area = int(region.sum() // 255)
+    max_area = int(body.max_area_frac * W * H)
+    if area == 0:
+        raise HTTPException(400, "Hech narsa topilmadi — boshqa nuqtaga bosing")
+    if area > max_area:
+        # Juda katta — morfologik eroziyaga harakat qilamiz
+        k = max(3, min(31, int(min(W, H) * 0.005)) | 1)
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k))
+        region = cv2.erode(region, kernel, iterations=2)
+        area = int(region.sum() // 255)
+        if area > max_area or area == 0:
+            raise HTTPException(400, f"Soha juda katta ({100*area/(W*H):.1f}% rasm) — toleranceni kamaytiring")
+
+    # Kontur va polygon
+    contours, _ = cv2.findContours(region, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if not contours:
+        raise HTTPException(400, "Kontur topilmadi")
+    # Bosilgan nuqtani o'z ichiga olgan eng katta konturni tanlaymiz
+    best = None
+    for c in contours:
+        if cv2.pointPolygonTest(c, (px, py), False) >= 0:
+            if best is None or cv2.contourArea(c) > cv2.contourArea(best):
+                best = c
+    if best is None:
+        best = max(contours, key=cv2.contourArea)
+    # Soddalashtirish: 0.3% perimeter
+    eps = 0.003 * cv2.arcLength(best, True)
+    approx = cv2.approxPolyDP(best, eps, True)
+    if len(approx) < 3:
+        # juda agressiv — kamroq qiling
+        approx = cv2.approxPolyDP(best, eps * 0.3, True)
+    if len(approx) < 3:
+        raise HTTPException(400, "Polygon yaratib bo'lmadi")
+
+    pts = [[float(p[0][0]) / W, float(p[0][1]) / H] for p in approx]
+
+    return {
+        "points": pts,
+        "image_size": [W, H],
+        "click_pixel": [px, py],
+        "area_pixels": area,
+        "area_pct": round(100.0 * area / (W * H), 3),
+        "n_vertices": len(pts),
+    }
 
 
 @app.post("/api/inference/run")
