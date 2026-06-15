@@ -1238,6 +1238,41 @@ def report_status(_user: dict = Depends(auth_mod.require_user)):
     }
 
 
+class ReportExportBody(BaseModel):
+    source: str
+    ref: str
+    report: str
+    findings: Optional[dict] = None
+    verified: bool = False
+
+
+@app.post("/api/report/export-sr")
+def report_export_sr(body: ReportExportBody, user: dict = Depends(auth_mod.require_user)):
+    """Tasdiqlangan hisobotni DICOM Comprehensive SR sifatida eksport qiladi
+    (bemor/study metadata manba DICOM'dan meros olinadi)."""
+    _validate_source(body.source)
+    _validate_ref(body.source, body.ref)
+    src_path = _resolve_dicom_path(body.source, body.ref)
+    if not (body.report or "").strip():
+        raise HTTPException(400, "Hisobot matni bo'sh")
+    try:
+        data = dsr.report_to_sr(
+            src_path, body.report,
+            findings=body.findings,
+            author=user.get("sub"),
+            verified=body.verified,
+        )
+    except Exception as e:
+        raise HTTPException(500, f"SR build failed: {e}")
+    base = Path(body.ref).stem or "report"
+    fname = f"{base}_report_sr.dcm"
+    return StreamingResponse(
+        io.BytesIO(data),
+        media_type="application/dicom",
+        headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+    )
+
+
 # --------------------------------------------------------------------------- #
 # Model management dashboard — statistika, delete, versionlar                  #
 # --------------------------------------------------------------------------- #

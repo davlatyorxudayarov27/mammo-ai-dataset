@@ -5972,6 +5972,7 @@ function wsConnect() {
 })();
 
 // ===== Mammografiya hisoboti generatori =====
+let _reportFindings = null;
 function _reportType(label) {
   const s = (label || '').toString().toLowerCase();
   if (/massa|mass|tumor|nodul/.test(s)) return 'mass';
@@ -6016,6 +6017,7 @@ async function generateReport() {
     }[j.mode] || j.mode;
     $('reportModeBadge').textContent = '· ' + modeLbl + (j.model ? ' (' + j.model + ')' : '');
     const fnd = j.findings || {};
+    _reportFindings = j.findings || null;
     const n = (fnd.lesions ? fnd.lesions.length : dets.length);
     $('reportFindings').textContent = n + ' ta topilma · Umumiy: BI-RADS ' + (fnd.overall_birads || j.birads || '?');
     const err = j.local_error || j.llm_error;
@@ -6041,8 +6043,38 @@ async function loadReportBackends() {
     }
   } catch (e) { el.textContent = ''; }
 }
+async function exportReportSR() {
+  const report = ($('reportText').value || '').trim();
+  const status = $('reportStatus');
+  if (!report) { status.textContent = 'Avval hisobot yarating'; return; }
+  const source = refSource(), ref = refValue();
+  if (!source || !ref) { status.textContent = 'Tasvir yuklanmagan'; return; }
+  const btn = $('reportSrBtn'); btn.disabled = true;
+  status.textContent = 'DICOM SR yaratilmoqda…';
+  try {
+    const r = await api('/api/report/export-sr', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ source, ref, report, findings: _reportFindings, verified: false }),
+    });
+    const blob = await r.blob();
+    const cd = r.headers.get('Content-Disposition') || '';
+    const m = cd.match(/filename="([^"]+)"/);
+    const fname = (m && m[1]) || 'report_sr.dcm';
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = fname; document.body.appendChild(a); a.click();
+    a.remove(); URL.revokeObjectURL(url);
+    status.textContent = '💾 DICOM SR yuklab olindi: ' + fname;
+  } catch (e) {
+    status.innerHTML = '<span style="color:#ef4444">SR xato: ' + (e.message || e) + '</span>';
+  } finally {
+    btn.disabled = false;
+  }
+}
 if ($('reportBtn')) {
   $('reportBtn').addEventListener('click', () => { $('reportModal').hidden = false; loadReportBackends(); generateReport(); });
+  $('reportSrBtn').addEventListener('click', exportReportSR);
   $('reportRegenBtn').addEventListener('click', generateReport);
   $('reportMode').addEventListener('change', generateReport);
   $('reportCloseBtn').addEventListener('click', () => { $('reportModal').hidden = true; });
