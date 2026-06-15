@@ -27,6 +27,6 @@ if "%LOCAL_DICOM_ROOT%"=="" (
 )
 
 echo.
-echo [run] http://127.0.0.1:8000  (LOCAL_DICOM_ROOT=%LOCAL_DICOM_ROOT%)
+echo [run] http://127.0.0.1:8002  (LOCAL_DICOM_ROOT=%LOCAL_DICOM_ROOT%)
 echo.
-python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
+python -m uvicorn app.main:app --host 127.0.0.1 --port 8002
