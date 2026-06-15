@@ -6010,20 +6010,39 @@ async function generateReport() {
       body: JSON.stringify({ detections: dets, dicom_meta: { acr_density: '' }, study_views: views, mode: $('reportMode').value, lang: 'uz' }),
     });
     $('reportText').value = j.report || '';
-    const modeLbl = { llm: '🤖 Claude', template: '📄 Shablon', template_fallback: '📄 Shablon (Claude mavjud emas)' }[j.mode] || j.mode;
+    const modeLbl = {
+      local: '🧠 Lokal AI', cloud: '🤖 Claude', llm: '🤖 Claude',
+      template: '📄 Shablon', template_fallback: '📄 Shablon (lokal model topilmadi)'
+    }[j.mode] || j.mode;
     $('reportModeBadge').textContent = '· ' + modeLbl + (j.model ? ' (' + j.model + ')' : '');
     const fnd = j.findings || {};
     const n = (fnd.lesions ? fnd.lesions.length : dets.length);
     $('reportFindings').textContent = n + ' ta topilma · Umumiy: BI-RADS ' + (fnd.overall_birads || j.birads || '?');
-    status.textContent = j.llm_error ? ('⚠ ' + j.llm_error) : '✓';
+    const err = j.local_error || j.llm_error;
+    status.textContent = err ? ('⚠ ' + err) : '✓';
   } catch (e) {
     status.innerHTML = '<span style="color:#ef4444">Xato: ' + (e.message || e) + '</span>';
   } finally {
     $('reportRegenBtn').disabled = false;
   }
 }
+async function loadReportBackends() {
+  const el = $('reportBackends');
+  if (!el) return;
+  try {
+    const j = await apiJson('/api/report/status');
+    if (j.ollama) {
+      const has = (j.ollama_models || []).length;
+      el.innerHTML = "🧠 Lokal AI (Ollama): <span style='color:#22c55e'>tayyor</span> · "
+        + (has ? j.ollama_models.join(', ') : ("model yo'q — <code>ollama pull " + j.ollama_default + "</code>"));
+    } else {
+      el.innerHTML = "🧠 Lokal AI (Ollama): <span style='color:#888'>topilmadi</span> — shablon ishlatiladi "
+        + "(o'rnatib <code>ollama pull " + j.ollama_default + "</code> qilsangiz tabiiy matn chiqadi).";
+    }
+  } catch (e) { el.textContent = ''; }
+}
 if ($('reportBtn')) {
-  $('reportBtn').addEventListener('click', () => { $('reportModal').hidden = false; generateReport(); });
+  $('reportBtn').addEventListener('click', () => { $('reportModal').hidden = false; loadReportBackends(); generateReport(); });
   $('reportRegenBtn').addEventListener('click', generateReport);
   $('reportMode').addEventListener('change', generateReport);
   $('reportCloseBtn').addEventListener('click', () => { $('reportModal').hidden = true; });

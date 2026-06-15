@@ -1224,6 +1224,20 @@ def report_generate(body: ReportGenerateBody, _user: dict = Depends(auth_mod.req
     return {"findings": findings, **out}
 
 
+@app.get("/api/report/status")
+def report_status(_user: dict = Depends(auth_mod.require_user)):
+    """Qaysi hisobot backendlari mavjud: shablon (doim), lokal Ollama, bulutli Claude."""
+    from . import report_gen as rg
+    models = rg._ollama_available()
+    return {
+        "template": True,
+        "ollama": models is not None,
+        "ollama_models": models or [],
+        "ollama_default": rg.OLLAMA_MODEL,
+        "anthropic_key": bool(os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_AUTH_TOKEN")),
+    }
+
+
 # --------------------------------------------------------------------------- #
 # Model management dashboard — statistika, delete, versionlar                  #
 # --------------------------------------------------------------------------- #

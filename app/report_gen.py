@@ -14,12 +14,19 @@ from __future__ import annotations
 
 import json
 import os
+import urllib.error
+import urllib.request
 from typing import Optional
 
 from . import report_findings as rf
 
-# claude-api ko'rsatmasi bo'yicha eng so'nggi model
+# Bulutli (Anthropic) model — faqat ANTHROPIC_API_KEY bo'lsa
 REPORT_MODEL = "claude-opus-4-8"
+
+# Lokal model (Ollama) — kalitsiz, o'z tizimingizda. O'rnatilmagan bo'lsa
+# avtomatik shablonga tushadi.
+OLLAMA_HOST = os.environ.get("OLLAMA_HOST", "http://127.0.0.1:11434").rstrip("/")
+OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "qwen2.5:7b")
 
 _LANG_NAME = {"uz": "o'zbek", "tr": "turk", "en": "ingliz", "ru": "rus"}
 
@@ -56,13 +63,25 @@ def render_template_report(findings: dict, lang: str = "uz") -> dict:
     overall = findings.get("overall_birads", "")
     rec = findings.get("recommendation", "")
 
+    views = study.get("views") or []
     blocks = ["MAMMOGRAFIYA XULOSASI (qoralama)"]
+    intro = "Tekshiruv: raqamli mammografiya"
+    if views:
+        intro += f" (proeksiyalar: {', '.join(views)})"
+    blocks.append(intro + ".")
     if density:
-        dl = f"Ko'krak zichligi (ACR): {density.upper()}"
+        dl = f"Ko'krak to'qimasi zichligi: ACR {density.upper()}"
         if density_txt:
             dl += f" — {density_txt}"
-        blocks.append(dl)
+        blocks.append(dl + ".")
     blocks.append(f"Topilmalar:\n{findings_txt}")
+    # Xulosa jumlasi
+    if lesions:
+        concl = (f"Xulosa: jami {len(lesions)} ta o'choq aniqlandi; "
+                 f"eng yuqori baho BI-RADS {overall}.")
+    else:
+        concl = "Xulosa: shubhali o'choq aniqlanmadi."
+    blocks.append(concl)
     blocks.append(f"Umumiy baho: BI-RADS {overall}\nTavsiya: {rec}")
     report = "\n\n".join(blocks) + "\n"
     return {
@@ -140,22 +159,83 @@ def draft_llm_report(
     }
 
 
+def _ollama_available(timeout: float = 2.0) -> Optional[list]:
+    """Ollama serveri ishlayaptimi? Ishlasa o'rnatilgan modellar ro'yxati, aks holda None."""
+    try:
+        with urllib.request.urlopen(OLLAMA_HOST + "/api/tags", timeout=timeout) as r:
+            data = json.loads(r.read().decode("utf-8"))
+        return [m.get("name", "") for m in data.get("models", [])]
+    except Exception:
+        return None
+
+
+def draft_local_report(
+    findings: dict,
+    examples: Optional[list] = None,
+    lang: str = "uz",
+    model: Optional[str] = None,
+) -> dict:
+    """Lokal Ollama modeli bilan grounded tabiiy hisobot qoralamasi (kalitsiz)."""
+    model = model or OLLAMA_MODEL
+    system, user = _build_prompt(findings, examples, lang)
+    payload = json.dumps({
+        "model": model,
+        "messages": [
+            {"role": "system", "content": system},
+            {"role": "user", "content": user},
+        ],
+        "stream": False,
+        "options": {"temperature": 0.2},
+    }).encode("utf-8")
+    req = urllib.request.Request(
+        OLLAMA_HOST + "/api/chat", data=payload,
+        headers={"Content-Type": "application/json"}, method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=180) as r:
+            data = json.loads(r.read().decode("utf-8"))
+    except urllib.error.URLError as e:
+        raise RuntimeError(
+            f"Ollama'ga ulanib bo'lmadi ({OLLAMA_HOST}) — server ishlab turganini tekshiring"
+        ) from e
+    if data.get("error"):
+        raise RuntimeError(f"Ollama xatosi: {data['error']}")
+    text = ((data.get("message") or {}).get("content") or "").strip()
+    if not text:
+        raise RuntimeError("Ollama bo'sh javob qaytardi (model yuklanmaganmi?)")
+    return {
+        "report": text,
+        "diagnosis": f"BI-RADS {findings.get('overall_birads', '')}",
+        "recommendations": findings.get("recommendation", ""),
+        "birads": findings.get("overall_birads", ""),
+        "mode": "local",
+        "model": model,
+    }
+
+
 def generate_report(
     findings: dict,
     mode: str = "auto",
     examples: Optional[list] = None,
     lang: str = "uz",
 ) -> dict:
-    """mode: 'template' | 'llm' | 'auto' (LLM bo'lmasa shablonga tushadi)."""
+    """mode:
+    'template' — deterministik shablon (modelsiz, doim ishlaydi)
+    'local'    — lokal Ollama modeli
+    'cloud'    — Anthropic Claude (ANTHROPIC_API_KEY kerak)
+    'auto'     — lokal (Ollama) bo'lsa undan, aks holda shablonga tushadi
+    """
     if mode == "template":
         return render_template_report(findings, lang)
-    if mode == "llm":
+    if mode == "local":
+        return draft_local_report(findings, examples=examples, lang=lang)
+    if mode in ("cloud", "llm"):
         return draft_llm_report(findings, examples=examples, lang=lang)
-    # auto
+    # auto: lokal (Ollama) -> shablon
     try:
-        return draft_llm_report(findings, examples=examples, lang=lang)
+        return draft_local_report(findings, examples=examples, lang=lang)
     except Exception as e:  # noqa: BLE001
         out = render_template_report(findings, lang)
         out["mode"] = "template_fallback"
-        out["llm_error"] = str(e)
+        out["local_error"] = str(e)
         return out

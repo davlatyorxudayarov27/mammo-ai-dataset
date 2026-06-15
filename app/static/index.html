@@ -60,13 +60,14 @@
     <p style="color:var(--muted);font-size:12px;margin-top:0">
       Joriy annotatsiyalardan tuzilgan strukturaviy topilmalardan hisobot.
       Radiolog tekshirib tasdiqlaydi — bu QORALAMA. <span id="reportModeBadge"></span>
+      <br><span id="reportBackends" style="font-size:11px"></span>
     </p>
     <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;flex-wrap:wrap">
       <label style="font-size:12px;color:var(--muted)">Usul:
         <select id="reportMode">
-          <option value="auto">Auto (Claude bo'lsa, aks holda shablon)</option>
-          <option value="template">Faqat shablon</option>
-          <option value="llm">Faqat Claude (LLM)</option>
+          <option value="auto">Auto (lokal model bo'lsa, aks holda shablon)</option>
+          <option value="template">Boyitilgan shablon (modelsiz)</option>
+          <option value="local">Lokal AI (Ollama)</option>
         </select>
       </label>
       <button type="button" id="reportRegenBtn">↻ Qayta yaratish</button>
