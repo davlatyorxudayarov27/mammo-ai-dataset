@@ -16,6 +16,12 @@ if not exist .venv (
     echo [xato] paketlar o'rnatilmadi.
     exit /b 1
   )
+  echo [setup] GPU uchun CUDA torch (cu128) o'rnatilmoqda (RTX 5070 / Blackwell)...
+  echo [setup] requirements.txt CPU torch tortadi — uni CUDA build bilan almashtiramiz.
+  pip install --force-reinstall torch==2.11.0 torchvision==0.26.0 --index-url https://download.pytorch.org/whl/cu128
+  if errorlevel 1 (
+    echo [ogohlantirish] CUDA torch o'rnatilmadi — GPU o'rniga CPU rejimida ishlashi mumkin.
+  )
 ) else (
   call .venv\Scripts\activate.bat
 )
