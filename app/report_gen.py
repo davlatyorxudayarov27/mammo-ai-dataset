@@ -26,7 +26,7 @@ REPORT_MODEL = "claude-opus-4-8"
 # Lokal model (Ollama) — kalitsiz, o'z tizimingizda. O'rnatilmagan bo'lsa
 # avtomatik shablonga tushadi.
 OLLAMA_HOST = os.environ.get("OLLAMA_HOST", "http://127.0.0.1:11434").rstrip("/")
-OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "qwen2.5:7b")
+OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "qwen2.5:3b")
 
 _LANG_NAME = {"uz": "o'zbek", "tr": "turk", "en": "ingliz", "ru": "rus"}
 
