@@ -1057,6 +1057,159 @@ def training_metrics(run_id: str, _user: dict = Depends(auth_mod.require_user)):
     return {"run_id": safe, "epochs": len(rows), "rows": rows}
 
 
+# --------------------------------------------------------------------------- #
+# O'qitishdan keyingi natijalar: plotlar, namuna bashoratlar, eksport, compare #
+# --------------------------------------------------------------------------- #
+_PLOT_FILES = {
+    "results": "results.png",
+    "confusion_matrix": "confusion_matrix.png",
+    "confusion_matrix_normalized": "confusion_matrix_normalized.png",
+    "PR_curve": "PR_curve.png",
+    "F1_curve": "F1_curve.png",
+    "P_curve": "P_curve.png",
+    "R_curve": "R_curve.png",
+    "labels": "labels.jpg",
+}
+
+
+@app.get("/api/training/plots/{run_id}")
+def training_plots(run_id: str, _user: dict = Depends(auth_mod.require_user)):
+    """Ultralytics o'qitish chiqargan grafiklar va namuna bashoratlar ro'yxati."""
+    safe = re.sub(r"[^A-Za-z0-9_.-]", "", run_id)
+    proj = BASE_DIR / "training_runs" / safe
+    available = []
+    for key, fname in _PLOT_FILES.items():
+        if next((p for p in proj.rglob(fname) if p.is_file()), None):
+            available.append({"key": key, "file": fname})
+    preds = sorted(p.name for p in proj.rglob("val_batch*_pred.jpg") if p.is_file())[:8]
+    return {"run_id": safe, "plots": available, "predictions": preds}
+
+
+@app.get("/api/training/plot/{run_id}")
+def training_plot(run_id: str, name: str, _user: dict = Depends(auth_mod.require_user)):
+    """Bitta plot/bashorat rasmini uzatadi (auth talab qiladi)."""
+    safe = re.sub(r"[^A-Za-z0-9_.-]", "", run_id)
+    fname = os.path.basename(name)
+    proj = BASE_DIR / "training_runs" / safe
+    f = next((p for p in proj.rglob(fname) if p.is_file()), None)
+    if not f:
+        raise HTTPException(404, f"rasm topilmadi: {fname}")
+    media = "image/jpeg" if f.suffix.lower() in (".jpg", ".jpeg") else "image/png"
+    return FileResponse(str(f), media_type=media)
+
+
+# Eksport jobs: export_id -> holat
+EXPORT_JOBS: dict = {}
+_EXPORT_FMT = {"onnx": "onnx", "tensorrt": "engine", "openvino": "openvino"}
+
+
+def _run_export(export_id: str, run_id: str, fmt_key: str, imgsz: int, half: bool):
+    state = EXPORT_JOBS.get(export_id, {})
+    try:
+        proj = BASE_DIR / "training_runs" / run_id
+        best = next((p for p in proj.rglob("best.pt") if p.is_file()), None)
+        if best is None:
+            raise RuntimeError("best.pt topilmadi — avval o'qitishni yakunlang")
+        from ultralytics import YOLO
+        m = YOLO(str(best))
+        out = m.export(format=_EXPORT_FMT[fmt_key], imgsz=imgsz, half=half)
+        state["status"] = "done"
+        state["output"] = str(out)
+    except Exception as e:  # noqa: BLE001
+        state["status"] = "failed"
+        state["error"] = f"{type(e).__name__}: {e}"
+    state["finished_at"] = datetime.now(timezone.utc).isoformat()
+    EXPORT_JOBS[export_id] = state
+
+
+class ExportBody(BaseModel):
+    run_id: str
+    format: str = "onnx"   # onnx | tensorrt | openvino
+    imgsz: int = 640
+    half: bool = False
+
+
+@app.post("/api/training/export")
+def training_export(body: ExportBody, _user: dict = Depends(auth_mod.require_user)):
+    """Model'ni ONNX/TensorRT/OpenVINO formatiga eksport qilishni boshlaydi (fonda)."""
+    fmt = (body.format or "onnx").lower()
+    if fmt not in _EXPORT_FMT:
+        raise HTTPException(400, f"noma'lum format: {fmt}")
+    safe = re.sub(r"[^A-Za-z0-9_.-]", "", body.run_id)
+    export_id = "exp_" + datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S") + "_" + uuid.uuid4().hex[:6]
+    EXPORT_JOBS[export_id] = {
+        "status": "running", "run_id": safe, "format": fmt,
+        "started_at": datetime.now(timezone.utc).isoformat(),
+    }
+    threading.Thread(
+        target=_run_export,
+        args=(export_id, safe, fmt, int(body.imgsz or 640), bool(body.half)),
+        daemon=True,
+    ).start()
+    return {"export_id": export_id, "status": "running"}
+
+
+@app.get("/api/training/export/status/{export_id}")
+def training_export_status(export_id: str, _user: dict = Depends(auth_mod.require_user)):
+    state = EXPORT_JOBS.get(export_id)
+    if not state:
+        raise HTTPException(404, "eksport topilmadi")
+    out = dict(state)
+    if out.get("output"):
+        out["filename"] = os.path.basename(out["output"])
+    return {"export_id": export_id, **out}
+
+
+@app.get("/api/training/export/download/{export_id}")
+def training_export_download(export_id: str, _user: dict = Depends(auth_mod.require_user)):
+    state = EXPORT_JOBS.get(export_id)
+    if not state or state.get("status") != "done" or not state.get("output"):
+        raise HTTPException(404, "eksport hali tayyor emas")
+    out = Path(state["output"])
+    if out.is_dir():
+        # OpenVINO papkani zip qilib beramiz
+        import shutil
+        zpath = shutil.make_archive(str(out), "zip", str(out))
+        out = Path(zpath)
+    if not out.exists():
+        raise HTTPException(404, "eksport fayli topilmadi")
+    return FileResponse(
+        str(out), media_type="application/octet-stream",
+        headers={"Content-Disposition": f'attachment; filename="{out.name}"'},
+    )
+
+
+@app.get("/api/training/compare")
+def training_compare(runs: str, _user: dict = Depends(auth_mod.require_user)):
+    """Bir nechta run'ning yakuniy metrikalarini yonma-yon qaytaradi."""
+    ids = [re.sub(r"[^A-Za-z0-9_.-]", "", r) for r in runs.split(",") if r.strip()][:5]
+    out = []
+    for rid in ids:
+        proj = BASE_DIR / "training_runs" / rid
+        rows = _read_results_csv(proj)
+        fr = rows[-1] if rows else {}
+
+        def g(*keys):
+            for k in keys:
+                v = fr.get(k)
+                if isinstance(v, (int, float)):
+                    return round(float(v), 4)
+            return None
+
+        params = (TRAINING_RUNS.get(rid) or {}).get("params", {})
+        out.append({
+            "run_id": rid,
+            "epochs": len(rows),
+            "mAP50": g("metrics/mAP50(B)", "metrics/mAP_0.5"),
+            "mAP50_95": g("metrics/mAP50-95(B)", "metrics/mAP_0.5:0.95"),
+            "precision": g("metrics/precision(B)", "metrics/precision"),
+            "recall": g("metrics/recall(B)", "metrics/recall"),
+            "base_model": params.get("base_model"),
+            "imgsz": params.get("imgsz"),
+        })
+    return {"runs": out}
+
+
 @app.get("/api/training/validate")
 def training_validate(
     yaml_path: str = Query(..., alias="yaml"),

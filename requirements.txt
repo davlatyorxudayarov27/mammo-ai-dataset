@@ -21,3 +21,6 @@ scipy>=1.11
 scikit-image>=0.22
 nibabel>=5.2
 anthropic>=0.40
+onnx>=1.16
+onnxruntime>=1.18
+onnxslim>=0.1

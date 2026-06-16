@@ -197,6 +197,45 @@
     </div>
 
     <div class="ts-section">
+      <h2>📊 Natijalar (run tugagach)</h2>
+      <div class="ts-row">
+        <label>Run</label>
+        <select id="resultRunSel"><option value="">— tugagan run tanlang —</option></select>
+      </div>
+      <div id="resultBtns" style="display:flex;gap:6px;flex-wrap:wrap;margin:8px 0"></div>
+      <div id="resultImgWrap" style="text-align:center;min-height:40px"></div>
+      <div class="ts-chart-title">Namuna bashoratlar (test rasmlarida bbox'lar)</div>
+      <div id="resultPreds" style="display:flex;gap:6px;flex-wrap:wrap"></div>
+    </div>
+
+    <div class="ts-section">
+      <h2>📦 Eksport</h2>
+      <div class="ts-row">
+        <label>Run</label>
+        <select id="exportRunSel"><option value="">— tugagan run —</option></select>
+      </div>
+      <div class="ts-row"><label>imgsz</label><input type="number" id="exportImgsz" value="640" min="64" max="2048" /></div>
+      <div style="display:flex;gap:6px;margin:8px 0;flex-wrap:wrap">
+        <button class="ts-btn" id="exportOnnx">ONNX</button>
+        <button class="ts-btn" id="exportTrt">TensorRT</button>
+        <button class="ts-btn" id="exportVino">OpenVINO</button>
+      </div>
+      <div class="ts-status" id="exportStatus"></div>
+      <div class="ts-hint">TensorRT/OpenVINO uchun tegishli paket o'rnatilgan bo'lishi kerak (xato bo'lsa ko'rsatiladi).</div>
+    </div>
+
+    <div class="ts-section">
+      <h2>⚖️ Run solishtirish</h2>
+      <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;flex-wrap:wrap">
+        <select id="cmpRunA"><option value="">Run A</option></select>
+        <span>vs</span>
+        <select id="cmpRunB"><option value="">Run B</option></select>
+        <button class="ts-btn" id="cmpBtn">Solishtir</button>
+      </div>
+      <div id="cmpResult" style="font-size:12px"></div>
+    </div>
+
+    <div class="ts-section">
       <h2>💡 Maslahat</h2>
       <ul style="font-size:12px;color:var(--muted);padding-left:18px;margin:0">
         <li><strong>Yangi data</strong>: yolo11n + pretrained ✓ + epochs=50 — eng tez sinov</li>

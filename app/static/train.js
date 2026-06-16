@@ -120,10 +120,156 @@ async function loadRuns() {
       }
     }
     resumeSel.value = cur;
+    populateRunSelects(runs);
   } catch (e) {
     div.textContent = 'Xato: ' + e.message;
   }
 }
+
+// ===== Natijalar / Eksport / Solishtirish run-select'lari =====
+function populateRunSelects(runs) {
+  const fill = (id, placeholder) => {
+    const sel = $(id);
+    if (!sel) return;
+    const cur = sel.value;
+    sel.innerHTML = `<option value="">${placeholder}</option>`;
+    for (const r of runs) {
+      const o = document.createElement('option');
+      o.value = r.run_id;
+      o.textContent = `${r.run_id.slice(0, 18)} (${r.status})`;
+      sel.appendChild(o);
+    }
+    sel.value = cur;
+  };
+  fill('resultRunSel', '— tugagan run tanlang —');
+  fill('exportRunSel', '— tugagan run —');
+  fill('cmpRunA', 'Run A');
+  fill('cmpRunB', 'Run B');
+}
+
+// ===== Natijalar paneli (confusion / PR / F1 / namuna bashoratlar) =====
+async function fetchImgUrl(url) {
+  const r = await api(url);
+  if (!r.ok) throw new Error('HTTP ' + r.status);
+  return URL.createObjectURL(await r.blob());
+}
+const _RESULT_LABELS = {
+  confusion_matrix: 'Confusion', confusion_matrix_normalized: 'Confusion (norm)',
+  PR_curve: 'PR-curve', F1_curve: 'F1-curve', P_curve: 'P-curve',
+  R_curve: 'R-curve', results: 'Natijalar', labels: 'Yorliqlar',
+};
+async function showResultPlot(runId, filename) {
+  const wrap = $('resultImgWrap');
+  wrap.textContent = 'yuklanmoqda…';
+  try {
+    const u = await fetchImgUrl(`/api/training/plot/${encodeURIComponent(runId)}?name=${encodeURIComponent(filename)}`);
+    wrap.innerHTML = '';
+    const img = document.createElement('img');
+    img.src = u; img.style.maxWidth = '100%'; img.style.borderRadius = '4px';
+    wrap.appendChild(img);
+  } catch (e) { wrap.textContent = 'Xato: ' + e.message; }
+}
+async function loadResults(runId) {
+  const btns = $('resultBtns'), preds = $('resultPreds'), wrap = $('resultImgWrap');
+  btns.innerHTML = ''; preds.innerHTML = ''; wrap.innerHTML = '';
+  if (!runId) return;
+  try {
+    const j = await apiJson(`/api/training/plots/${encodeURIComponent(runId)}`);
+    if (!(j.plots || []).length) { btns.textContent = "Grafiklar yo'q (run hali tugamagan bo'lishi mumkin)"; }
+    for (const p of (j.plots || [])) {
+      const b = document.createElement('button');
+      b.className = 'ts-btn'; b.style.fontSize = '11px';
+      b.textContent = _RESULT_LABELS[p.key] || p.key;
+      b.addEventListener('click', () => showResultPlot(runId, p.file));
+      btns.appendChild(b);
+    }
+    const first = (j.plots || []).find(p => p.key === 'PR_curve')
+      || (j.plots || []).find(p => p.key === 'confusion_matrix') || (j.plots || [])[0];
+    if (first) showResultPlot(runId, first.file);
+    if (!(j.predictions || []).length) { preds.textContent = "Namuna bashorat yo'q"; }
+    for (const name of (j.predictions || [])) {
+      try {
+        const u = await fetchImgUrl(`/api/training/plot/${encodeURIComponent(runId)}?name=${encodeURIComponent(name)}`);
+        const img = document.createElement('img');
+        img.src = u; img.style.width = '130px'; img.style.borderRadius = '4px'; img.style.cursor = 'pointer';
+        img.title = name;
+        img.addEventListener('click', () => showResultPlot(runId, name));
+        preds.appendChild(img);
+      } catch (e) { /* jim */ }
+    }
+  } catch (e) { btns.textContent = 'Xato: ' + e.message; }
+}
+
+// ===== Eksport (ONNX / TensorRT / OpenVINO) =====
+let _exportPoll = null;
+async function startExport(fmt) {
+  const runId = $('exportRunSel').value;
+  const status = $('exportStatus');
+  if (!runId) { status.textContent = 'Avval tugagan run tanlang'; return; }
+  status.textContent = `${fmt.toUpperCase()} eksport boshlandi…`;
+  try {
+    const j = await apiJson('/api/training/export', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ run_id: runId, format: fmt, imgsz: parseInt($('exportImgsz').value, 10) || 640 }),
+    });
+    const eid = j.export_id;
+    if (_exportPoll) clearInterval(_exportPoll);
+    _exportPoll = setInterval(async () => {
+      try {
+        const s = await apiJson('/api/training/export/status/' + eid);
+        if (s.status === 'done') {
+          clearInterval(_exportPoll); _exportPoll = null;
+          status.innerHTML = `✓ ${s.filename || 'tayyor'} — <a href="#" id="exportDl">💾 yuklab olish</a>`;
+          $('exportDl').addEventListener('click', async (ev) => { ev.preventDefault(); downloadExport(eid); });
+        } else if (s.status === 'failed') {
+          clearInterval(_exportPoll); _exportPoll = null;
+          status.innerHTML = `<span style="color:#ef4444">Xato: ${s.error || ''}</span>`;
+        } else {
+          status.textContent = `${fmt.toUpperCase()} eksport ketmoqda… (paket o'rnatilishi bilan biroz vaqt olishi mumkin)`;
+        }
+      } catch (e) { clearInterval(_exportPoll); _exportPoll = null; status.textContent = 'Status xato: ' + e.message; }
+    }, 2500);
+  } catch (e) { status.innerHTML = `<span style="color:#ef4444">Xato: ${e.message}</span>`; }
+}
+async function downloadExport(eid) {
+  try {
+    const r = await api('/api/training/export/download/' + eid);
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const blob = await r.blob();
+    const cd = r.headers.get('Content-Disposition') || '';
+    const m = cd.match(/filename="([^"]+)"/);
+    const fname = (m && m[1]) || 'model.bin';
+    const u = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = u; a.download = fname; document.body.appendChild(a); a.click(); a.remove();
+    URL.revokeObjectURL(u);
+  } catch (e) { $('exportStatus').textContent = 'Yuklab olish xato: ' + e.message; }
+}
+
+// ===== Run solishtirish =====
+async function runCompare() {
+  const a = $('cmpRunA').value, b = $('cmpRunB').value;
+  const wrap = $('cmpResult');
+  if (!a || !b) { wrap.textContent = 'Ikki run tanlang'; return; }
+  wrap.textContent = 'solishtirilmoqda…';
+  try {
+    const j = await apiJson('/api/training/compare?runs=' + encodeURIComponent(a + ',' + b));
+    const rs = j.runs || [];
+    const num = (r, k) => (r && r[k] != null ? Number(r[k]).toFixed(3) : '-');
+    const bar = (v) => { const px = Math.round((v || 0) * 80); return `<span style="display:inline-block;height:6px;width:${px}px;background:#4a90e2;border-radius:3px;vertical-align:middle;margin-left:4px"></span>`; };
+    const rows = ['mAP50', 'mAP50_95', 'precision', 'recall'].map(k => {
+      const va = rs[0] ? rs[0][k] : null, vb = rs[1] ? rs[1][k] : null;
+      const win = (va != null && vb != null) ? (va > vb ? '🅐' : va < vb ? '🅑' : '=') : '';
+      return `<tr><td>${k}</td><td>${num(rs[0], k)}${bar(va)}</td><td>${num(rs[1], k)}${bar(vb)}</td><td>${win}</td></tr>`;
+    }).join('');
+    const head = (r, d) => r ? `${r.run_id.slice(0, 12)}<br><span class="ts-hint">${r.base_model || ''} · ${r.epochs}e</span>` : d;
+    wrap.innerHTML = `<table style="width:100%;border-collapse:collapse;text-align:left">
+      <thead><tr><th>Metrika</th><th>🅐 ${head(rs[0], 'A')}</th><th>🅑 ${head(rs[1], 'B')}</th><th>↑</th></tr></thead>
+      <tbody>${rows}</tbody></table>`;
+  } catch (e) { wrap.textContent = 'Xato: ' + e.message; }
+}
+
+
 
 $('datasetSel').addEventListener('change', () => {
   const sel = $('datasetSel');
@@ -432,6 +578,11 @@ $('validateBtn').addEventListener('click', validateDataset);
 $('dataYamlPath').addEventListener('change', validateDataset);
 ['imgsz', 'batch', 'device'].forEach(id => $(id).addEventListener('change', estimateVram));
 $('baseModelSel').addEventListener('change', estimateVram);
+$('resultRunSel').addEventListener('change', () => loadResults($('resultRunSel').value));
+$('exportOnnx').addEventListener('click', () => startExport('onnx'));
+$('exportTrt').addEventListener('click', () => startExport('tensorrt'));
+$('exportVino').addEventListener('click', () => startExport('openvino'));
+$('cmpBtn').addEventListener('click', runCompare);
 
 // Boshlash
 (async () => {
