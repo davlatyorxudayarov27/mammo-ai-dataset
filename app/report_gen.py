@@ -26,7 +26,7 @@ REPORT_MODEL = "claude-opus-4-8"
 # Lokal model (Ollama) — kalitsiz, o'z tizimingizda. O'rnatilmagan bo'lsa
 # avtomatik shablonga tushadi.
 OLLAMA_HOST = os.environ.get("OLLAMA_HOST", "http://127.0.0.1:11434").rstrip("/")
-OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "qwen2.5:3b")
+OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "qwen2.5:7b")
 
 _LANG_NAME = {"uz": "o'zbek", "tr": "turk", "en": "ingliz", "ru": "rus"}
 
@@ -103,6 +103,14 @@ def _build_prompt(findings: dict, examples: Optional[list], lang: str) -> tuple[
         "Berilmagan ma'lumotni yozmang va taxmin qilmang. "
         "Bu hisobot radiolog tomonidan tekshirib tasdiqlanadigan QORALAMA. "
         f"Hisobotni {lang_name} tilida, qisqa va klinik uslubda yozing. "
+        "Atamalarni AYNAN shunday ishlating: laterality 'L' = 'chap ko'krak', "
+        "'R' = 'o'ng ko'krak'; 'mass' = 'massa'; 'calcification' = 'mikrokalsifikatsiya'; "
+        "'asymmetry' = 'asimmetriya'; 'architectural_distortion' = 'arxitektura buzilishi'. "
+        "Ko'krak a'zosi uchun faqat 'ko'krak' so'zini ishlating (boshqa so'z emas). "
+        "Proeksiya nomlarini (CC, MLO) va BI-RADS kategoriyasini o'zgartirmang. "
+        "'olingan_proeksiyalar' — bu texnik ro'yxat, TOPILMA EMAS: ular haqida hech narsa, "
+        "ayniqsa 'normal' deб yozmang. Faqat 'lesions' ichidagi o'choqlarni tavsiflang. "
+        "Agar 'lesions' bo'sh bo'lsa, faqat: 'Shubhali o'choq aniqlanmadi.' deб yozing. "
         "Tuzilma: 'Topilmalar', 'Umumiy baho (BI-RADS)', 'Tavsiya'."
     )
     ex_block = ""
@@ -113,11 +121,24 @@ def _build_prompt(findings: dict, examples: Optional[list], lang: str) -> tuple[
             "ulardagi topilmalar yoki bemor ma'lumotlarini ko'chirmang):\n\n"
             f"{joined}\n\n"
         )
+    # Model uchun tozalangan nusxa: confidence (ichki metadata) olib tashlanadi,
+    # views aniq nomlanadi (topilma bilan adashtirmaslik uchun).
+    study = findings.get("study", {}) or {}
+    clean = {
+        "acr_zichlik": study.get("acr_density", ""),
+        "olingan_proeksiyalar": study.get("views", []),
+        "lesions": [
+            {k: v for k, v in (l or {}).items() if k != "confidence" and v not in (None, "")}
+            for l in (findings.get("lesions") or [])
+        ],
+        "overall_birads": findings.get("overall_birads", ""),
+        "recommendation": findings.get("recommendation", ""),
+    }
     user = (
         ex_block
         + "Quyidagi strukturaviy topilmalardan mammografiya hisoboti qoralamasini yozing.\n\n"
         + "TOPILMALAR (JSON):\n"
-        + json.dumps(findings, ensure_ascii=False, indent=2)
+        + json.dumps(clean, ensure_ascii=False, indent=2)
     )
     return system, user
 
@@ -185,7 +206,7 @@ def draft_local_report(
             {"role": "user", "content": user},
         ],
         "stream": False,
-        "options": {"temperature": 0.2},
+        "options": {"temperature": 0.0},
     }).encode("utf-8")
     req = urllib.request.Request(
         OLLAMA_HOST + "/api/chat", data=payload,
