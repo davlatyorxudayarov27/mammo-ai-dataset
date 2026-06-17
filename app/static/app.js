@@ -1857,7 +1857,9 @@ function applyTransform() {
   });
 
   wrap.addEventListener('mousedown', (e) => {
-    if (state.tool === 'bbox' && e.target.id === 'annoSvg') return;
+    // Chizish/o'lchov asboblarida SVG ustidagi bosish pan boshlamasligi kerak —
+    // aks holda Ruler/Angle/Poly/Smart click'lari ishlamaydi.
+    if (e.target.id === 'annoSvg' && ['bbox', 'poly', 'ruler', 'angle', 'smart'].includes(state.tool)) return;
     if (e.button !== 0 && e.button !== 1) return;
     dragging = true; lastX = e.clientX; lastY = e.clientY;
     wrap.classList.add('dragging');
@@ -3716,6 +3718,7 @@ function setTool(t) {
   stack.classList.toggle('drawing', t === 'bbox');
   stack.classList.toggle('drawing-poly', t === 'poly');
   stack.classList.toggle('drawing-measure', t === 'ruler' || t === 'angle');
+  stack.classList.toggle('drawing-smart', t === 'smart');
   $('canvasWrap').classList.toggle('drawing', ['bbox', 'poly', 'ruler', 'angle', 'smart'].includes(t));
 }
 $('toolSelect').addEventListener('click', () => setTool('select'));
