@@ -1060,16 +1060,18 @@ def training_metrics(run_id: str, _user: dict = Depends(auth_mod.require_user)):
 # --------------------------------------------------------------------------- #
 # O'qitishdan keyingi natijalar: plotlar, namuna bashoratlar, eksport, compare #
 # --------------------------------------------------------------------------- #
-_PLOT_FILES = {
-    "results": "results.png",
-    "confusion_matrix": "confusion_matrix.png",
-    "confusion_matrix_normalized": "confusion_matrix_normalized.png",
-    "PR_curve": "PR_curve.png",
-    "F1_curve": "F1_curve.png",
-    "P_curve": "P_curve.png",
-    "R_curve": "R_curve.png",
-    "labels": "labels.jpg",
-}
+# Har bir plot uchun nomzod fayl nomlari (Ultralytics versiyalari bo'yicha farqlanadi:
+# yangi versiyalar "Box" prefiksini qo'shadi — BoxPR_curve.png va h.k.).
+_PLOT_SPECS = [
+    ("results", ["results.png"]),
+    ("confusion_matrix", ["confusion_matrix.png"]),
+    ("confusion_matrix_normalized", ["confusion_matrix_normalized.png"]),
+    ("PR_curve", ["BoxPR_curve.png", "PR_curve.png"]),
+    ("F1_curve", ["BoxF1_curve.png", "F1_curve.png"]),
+    ("P_curve", ["BoxP_curve.png", "P_curve.png"]),
+    ("R_curve", ["BoxR_curve.png", "R_curve.png"]),
+    ("labels", ["labels.jpg"]),
+]
 
 
 @app.get("/api/training/plots/{run_id}")
@@ -1078,9 +1080,14 @@ def training_plots(run_id: str, _user: dict = Depends(auth_mod.require_user)):
     safe = re.sub(r"[^A-Za-z0-9_.-]", "", run_id)
     proj = BASE_DIR / "training_runs" / safe
     available = []
-    for key, fname in _PLOT_FILES.items():
-        if next((p for p in proj.rglob(fname) if p.is_file()), None):
-            available.append({"key": key, "file": fname})
+    for key, names in _PLOT_SPECS:
+        found = None
+        for nm in names:
+            found = next((p for p in proj.rglob(nm) if p.is_file()), None)
+            if found:
+                break
+        if found:
+            available.append({"key": key, "file": found.name})
     preds = sorted(p.name for p in proj.rglob("val_batch*_pred.jpg") if p.is_file())[:8]
     return {"run_id": safe, "plots": available, "predictions": preds}
 
