@@ -73,6 +73,9 @@ logs/
 *.tmp
 *.bak
 
+# --- Vaqtinchalik test artefaktlari (skrinshot/heatmap) ---
+*_test.png
+
 # ============================================================
 # SCREENSHOT'LAR VA QO'LLANMA PDF'LAR — ehtimol PHI bor
 # ============================================================
