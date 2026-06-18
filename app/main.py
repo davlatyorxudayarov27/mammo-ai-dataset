@@ -3456,6 +3456,113 @@ def _export_images() -> list[dict]:
     return out
 
 
+def _build_yolo_dataset_zip(imgsz: int = 1024, val_frac: float = 0.2, seed: int = 42) -> bytes:
+    """Annotatsiyalardan TO'LIQ, yuklab olinadigan YOLO dataset:
+        images/{train,val}/<id>.png + labels/{train,val}/<id>.txt + data.yaml
+    Rasmlar DICOM'dan render qilinadi, train/val bemor darajasida bo'linadi."""
+    import random
+    import zipfile
+
+    items: list[dict] = []
+    label_set: set[str] = set()
+    for ann_path in sorted(ANNOT_DIR.glob("upload__*.json")):
+        file_id = ann_path.stem.replace("upload__", "", 1)
+        dcm = UPLOAD_DIR / f"{file_id}.dcm"
+        if not dcm.exists():
+            continue
+        try:
+            data = json.loads(ann_path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        kept = []
+        for a in (data.get("annotations") or []):
+            t = a.get("type")
+            if t == "bbox" and a.get("bbox"):
+                bx, by, bw, bh = a["bbox"][:4]
+            elif t == "polygon" and a.get("points") and len(a["points"]) >= 3:
+                bx, by, bw, bh = _polygon_to_bbox_pts(a["points"])
+            else:
+                continue
+            lbl = str(a.get("label", "") or "lesion")
+            kept.append({"label": lbl, "bbox": [bx, by, bw, bh]})
+            label_set.add(lbl)
+        if not kept:
+            continue
+        try:
+            ds = pydicom.dcmread(str(dcm), stop_before_pixels=True, force=True)
+            pid = str(getattr(ds, "PatientID", "") or "")
+            suid = str(getattr(ds, "StudyInstanceUID", "") or "")
+        except Exception:
+            pid = suid = ""
+        items.append({"file_id": file_id, "dcm": dcm, "annotations": kept, "group": pid or suid or file_id})
+
+    if not items:
+        raise HTTPException(400, "Annotatsiya bo'lgan fayl topilmadi")
+
+    classes = sorted(label_set)
+    cls_to_id = {n: i for i, n in enumerate(classes)}
+    imgsz = max(256, min(4096, int(imgsz)))
+    val_frac = max(0.0, min(0.5, float(val_frac)))
+    rng = random.Random(seed)
+    groups = sorted({it["group"] for it in items})
+    rng.shuffle(groups)
+    if len(groups) <= 1 and len(items) > 1:
+        # Bitta bemor: rasm darajasida bo'linish (train bo'sh qolmasligi uchun)
+        order = list(range(len(items)))
+        rng.shuffle(order)
+        n_val_items = max(1, int(round(len(items) * val_frac))) if val_frac > 0 else 0
+        n_val_items = min(n_val_items, len(items) - 1)  # kamida 1 ta train
+        val_idx = set(order[:n_val_items])
+        for i, it in enumerate(items):
+            it["_split"] = "val" if i in val_idx else "train"
+    else:
+        n_val_groups = max(1, int(round(len(groups) * val_frac))) if val_frac > 0 else 0
+        if len(groups) > 1:
+            n_val_groups = min(n_val_groups, len(groups) - 1)  # train bo'sh qolmasin
+        val_groups = set(groups[:n_val_groups])
+        for it in items:
+            it["_split"] = "val" if it["group"] in val_groups else "train"
+
+    n_train = n_val = 0
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+        for it in items:
+            split = it["_split"]
+            try:
+                png = render_frame_png(it["dcm"], frame=0, max_dim=imgsz)
+            except Exception:
+                continue
+            z.writestr(f"images/{split}/{it['file_id']}.png", png)
+            lines = []
+            for a in it["annotations"]:
+                cid = cls_to_id.get(a["label"])
+                if cid is None:
+                    continue
+                bx, by, bw, bh = a["bbox"]
+                cx = max(0.0, min(1.0, bx + bw / 2.0))
+                cy = max(0.0, min(1.0, by + bh / 2.0))
+                bw = max(0.0, min(1.0, bw))
+                bh = max(0.0, min(1.0, bh))
+                if bw <= 0 or bh <= 0:
+                    continue
+                lines.append(f"{cid} {cx:.6f} {cy:.6f} {bw:.6f} {bh:.6f}")
+            z.writestr(f"labels/{split}/{it['file_id']}.txt", ("\n".join(lines) + "\n") if lines else "")
+            n_train, n_val = (n_train + 1, n_val) if split == "train" else (n_train, n_val + 1)
+        names = "\n".join(f"  {i}: {n}" for i, n in enumerate(classes))
+        z.writestr("data.yaml",
+                   "# MAMOGRAF to'liq YOLO dataset (rasm + label + split)\n"
+                   "path: .\ntrain: images/train\nval: images/val\n"
+                   f"nc: {len(classes)}\nnames:\n{names}\n")
+        z.writestr("README.txt",
+                   "MAMOGRAF to'liq YOLO dataset.\n"
+                   f"Train rasm: {n_train}, Val rasm: {n_val}, klasslar: {len(classes)}.\n\n"
+                   "Foydalanish:\n"
+                   "1) ZIP ni biror papkaga oching.\n"
+                   "2) Model Studio'da 'data.yaml' yo'lini kiriting va o'qiting,\n"
+                   "   yoki: yolo train data=data.yaml model=yolo11n.pt epochs=100 imgsz=1024\n")
+    return buf.getvalue()
+
+
 _EXPORT_FORMATS = {
     "coco": ("application/json", "json"),
     "yolo": ("application/zip", "zip"),
@@ -3465,7 +3572,7 @@ _EXPORT_FORMATS = {
 
 
 @app.get("/api/export")
-def export(format: str = "coco"):
+def export(format: str = "coco", imgsz: int = 1024, val_frac: float = 0.2):
     fmt = format.lower()
     if fmt not in _EXPORT_FORMATS:
         raise HTTPException(400, f"unsupported format; use one of: {', '.join(_EXPORT_FORMATS)}")
@@ -3475,13 +3582,13 @@ def export(format: str = "coco"):
     if fmt == "coco":
         body = json.dumps(_build_coco(), ensure_ascii=False, indent=2).encode("utf-8")
         fname = f"annotations_coco_{stamp}.json"
+    elif fmt == "yolo":
+        # TO'LIQ dataset: rasmlar + label'lar + train/val + data.yaml (o'qitishga tayyor)
+        body = _build_yolo_dataset_zip(imgsz=imgsz, val_frac=val_frac)
+        fname = f"yolo_dataset_{stamp}.zip"
     else:
         images = _export_images()
-        label_names = [l["name"] for l in load_labels_config()[0]]
-        if fmt == "yolo":
-            body = exporters.build_yolo_zip(images, label_names)
-            fname = f"annotations_yolo_{stamp}.zip"
-        elif fmt == "voc":
+        if fmt == "voc":
             body = exporters.build_voc_zip(images)
             fname = f"annotations_voc_{stamp}.zip"
         else:  # csv
