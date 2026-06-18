@@ -36,7 +36,7 @@ from . import inference as inf
 from . import pacs as pacs_mod
 from . import ws as ws_mod
 from .dicom_utils import (
-    NoPixelDataError, extract_sr_content, load_frame_array, quick_summary,
+    NoPixelDataError, auto_window, extract_sr_content, load_frame_array, quick_summary,
     read_metadata, render_frame_png,
 )
 
@@ -1835,6 +1835,21 @@ def image(
     except Exception as e:
         raise HTTPException(500, f"render failed: {e}")
     return StreamingResponse(io.BytesIO(png_bytes), media_type="image/png")
+
+
+@app.get("/api/files/{file_id}/auto_window")
+def auto_window_ep(file_id: str, frame: int = 0):
+    """Histogramma asosida avtomatik WC/WW (oyna taglari yo'q rasmlar uchun ham)."""
+    p = UPLOAD_DIR / f"{file_id}.dcm"
+    if not p.exists():
+        raise HTTPException(404)
+    try:
+        wc, ww = auto_window(p, frame=frame)
+    except NoPixelDataError:
+        raise HTTPException(422, "no pixels")
+    except Exception as e:
+        raise HTTPException(500, f"auto_window failed: {e}")
+    return {"wc": wc, "ww": ww}
 
 
 @app.delete("/api/files/{file_id}")

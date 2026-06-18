@@ -1635,16 +1635,14 @@ async function loadImage(fitAfter) {
   const token = ++_imgLoadToken;
   const url = imageUrl();
 
-  try {
-    const probe = await fetch(url, { method: 'HEAD' });
-    if (probe.status === 422 || (state.meta && (state.meta.Modality === 'SR' || (state.meta.Modality || '').toUpperCase() === 'SR'))) {
-      if (probe.status === 422 || state.meta?.Modality === 'SR') {
-        await renderSrView();
-        return;
-      }
-    }
-  } catch (e) {
-    // fall through to img-tag flow
+  // SR (matnli hisobot, piksel yo'q) — to'g'ridan-to'g'ri SR ko'rinishi.
+  // (Avval HEAD-probe ishlatilardi, lekin /image endpoint faqat GET — HEAD 404
+  //  bergani uchun har yuklashda keraksiz xato chiqardi. Endi Modality bo'yicha
+  //  tekshiramiz; aniqlanmagan no-pixel hollarini quyidagi img.onerror->GET->422
+  //  fallback ushlaydi.)
+  if (state.meta && (state.meta.Modality || '').toUpperCase() === 'SR') {
+    await renderSrView();
+    return;
   }
 
   const img = $('dicomImg');
@@ -3602,11 +3600,21 @@ function applyWl(wc, ww, presetName) {
 }
 
 async function applyAutoWl() {
-  // Histogramma asosida — DICOM metadata'dan WC/WW
   if (!state.current) return;
+  // 1) Histogramma (persentil) asosida — oyna taglari yo'q rasmlarda ham ishlaydi
+  try {
+    const r = await apiJson(
+      `/api/files/${state.current.id || ''}/auto_window?frame=${state.frame || 0}`
+    ).catch(() => null);
+    if (r && r.ww > 0) {
+      applyWl(parseFloat(r.wc), parseFloat(r.ww), 'auto');
+      setStatus(`Auto W/L (histogramma): WC=${Math.round(r.wc)}, WW=${Math.round(r.ww)}`);
+      return;
+    }
+  } catch {}
+  // 2) DICOM WindowCenter / WindowWidth tag'lari
   try {
     const md = await apiJson(`/api/files/${state.current.id || ''}/metadata`).catch(() => null);
-    // Aniqlangan WC/WW DICOM tag'larida (WindowCenter / WindowWidth)
     const wc = md && (md.WindowCenter || md.window_center);
     const ww = md && (md.WindowWidth || md.window_width);
     if (wc != null && ww != null) {
@@ -3616,11 +3624,11 @@ async function applyAutoWl() {
       return;
     }
   } catch {}
-  // Fallback: DICOM default'i
+  // 3) DICOM default'i
   if (state.defaultWc != null && state.defaultWw != null) {
     applyWl(state.defaultWc, state.defaultWw, 'auto');
   } else {
-    setStatus('Auto W/L: DICOM\'da WindowCenter yo\'q');
+    setStatus("Auto W/L: hisoblab bo'lmadi");
   }
 }
 
@@ -4131,9 +4139,10 @@ function renderSvg() {
   if (selectedAnn && state.tool !== 'bbox' && state.tool !== 'poly') {
     if (selectedAnn.type === 'polygon') {
       renderPolygonHandles(selectedAnn);
-    } else {
+    } else if (Array.isArray(selectedAnn.bbox)) {
       renderHandles(selectedAnn);
     }
+    // ruler/angle: bbox yo'q — tahrirlash tutqichlari qo'llanmaydi (o'chirib qayta chizish mumkin)
   }
 
   // (B2) Ruler/Angle in-progress preview
@@ -4201,6 +4210,7 @@ const HANDLE_CURSORS = {
 };
 
 function renderHandles(ann) {
+  if (!Array.isArray(ann.bbox)) return;  // bbox yo'q (ruler/angle) — tutqich chizilmaydi
   const svg = $('annoSvg');
   const { w: VW, h: VH } = svgViewSize();
   const [bx, by, bw, bh] = ann.bbox;
@@ -4571,10 +4581,29 @@ function renderAnnoList() {
 
     const meta = document.createElement('div');
     meta.className = 'meta-row';
-    const [x, y, w, h] = a.bbox;
+    // bbox bo'lmagan annotatsiyalar (ruler/angle/smart-polygon) uchun nuqtalardan hisoblaymiz
+    let bb = a.bbox;
+    if (!Array.isArray(bb)) {
+      if (Array.isArray(a.points) && a.points.length) {
+        const xs = a.points.map(p => p[0]), ys = a.points.map(p => p[1]);
+        const mnx = Math.min(...xs), mny = Math.min(...ys);
+        bb = [mnx, mny, Math.max(...xs) - mnx, Math.max(...ys) - mny];
+      } else {
+        bb = [0, 0, 0, 0];
+      }
+    }
+    const [x, y, w, h] = bb;
     const W = state.meta && state.meta.Columns ? parseInt(state.meta.Columns, 10) : null;
     const H = state.meta && state.meta.Rows ? parseInt(state.meta.Rows, 10) : null;
-    const typeIcon = a.type === 'polygon' ? `⬢ ${a.points?.length || 0} nuqta · ` : '';
+    let typeIcon = '';
+    if (a.type === 'polygon') {
+      typeIcon = `⬢ ${a.points?.length || 0} nuqta · `;
+    } else if (a.type === 'ruler' && a.points && a.points.length >= 2) {
+      const mm = computeDistanceMm(a.points[0], a.points[1]);
+      typeIcon = mm != null ? `📏 ${mm.toFixed(1)} mm · ` : "📏 o'lchov · ";
+    } else if (a.type === 'angle' && a.points && a.points.length >= 3) {
+      typeIcon = `📐 ${computeAngleDeg(a.points[0], a.points[1], a.points[2]).toFixed(1)}° · `;
+    }
     if (W && H) {
       meta.textContent = `${typeIcon}(${Math.round(x * W)}, ${Math.round(y * H)}) — ${Math.round(w * W)}×${Math.round(h * H)} px`;
     } else {

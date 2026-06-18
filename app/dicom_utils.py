@@ -212,6 +212,30 @@ def load_frame_array(path: Path, frame: int = 0) -> tuple[np.ndarray, Optional[t
     return arr, spacing
 
 
+def auto_window(path: Path, frame: int = 0) -> tuple[float, float]:
+    """Histogramma (persentil) asosida avtomatik WC/WW.
+
+    DICOM ``WindowCenter``/``WindowWidth`` taglariga tayanmaydi — xom
+    (modality-LUT qo'llangan) pikseldan 2..98 persentil oralig'ini oladi.
+    Shuning uchun anonimlashtirilgan yoki qayta ishlangan, oyna taglari
+    yo'q rasmlarda ham ishlaydi.
+    """
+    arr, _ = load_frame_array(path, frame)
+    finite = arr[np.isfinite(arr)]
+    if finite.size == 0:
+        return 0.0, 1.0
+    lo = float(np.percentile(finite, 2.0))
+    hi = float(np.percentile(finite, 98.0))
+    if hi <= lo:
+        lo = float(finite.min())
+        hi = float(finite.max())
+        if hi <= lo:
+            hi = lo + 1.0
+    wc = (lo + hi) / 2.0
+    ww = hi - lo
+    return wc, ww
+
+
 _META_KEYS = [
     "PatientName", "PatientID", "PatientSex", "PatientBirthDate", "PatientAge",
     "StudyDate", "StudyTime", "StudyDescription", "StudyInstanceUID",
