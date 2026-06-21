@@ -492,20 +492,32 @@
       <span class="zoomLbl" id="zoomLbl">100%</span>
       <span class="save-status" id="saveStatus"></span>
       <button id="saveBtn" title="Annotatsiyalarni saqlash (Ctrl+S)" disabled>💾 Saqlash</button>
-      <button id="exportBtn" title="Barcha annotatsiyalarni COCO JSON sifatida yuklab olish">⤓ COCO</button>
-      <button id="exportYoloBtn" title="Barcha annotatsiyalarni YOLO (.txt) dataset (ZIP) sifatida yuklab olish">⤓ YOLO</button>
-      <button id="exportVocBtn" title="Barcha annotatsiyalarni Pascal VOC (XML, ZIP) sifatida yuklab olish">⤓ VOC</button>
-      <button id="exportCsvBtn" title="Barcha annotatsiyalarni CSV jadval (har annotatsiya bir qator, ko'p-label ustun bilan) sifatida yuklab olish">⤓ CSV</button>
-      <button id="deidBtn" title="PHI tahlil va anonimlashtirilgan DICOM yuklab olish" hidden>🛡 De-ID</button>
-      <button id="srBtn" title="Annotatsiyalarni DICOM-SR sifatida yuklab olish" hidden>📄 SR</button>
-      <button id="segBtn" title="Annotatsiyalarni DICOM-SEG (pixel mask) sifatida yuklab olish" hidden>🖼 SEG</button>
-      <button id="maskPngBtn" title="Joriy rasm uchun segmentatsiya maskasi — PNG (label-indexed)" hidden>🎭 Mask PNG</button>
-      <button id="maskNiftiBtn" title="Joriy rasm uchun segmentatsiya maskasi — NIfTI (.nii.gz)" hidden>🎭 NIfTI</button>
-      <button id="radiomicsBtn" title="Tanlangan annotatsiya uchun radiomika tahlili (ROI bo'yicha 60 ta belgi)" hidden>📊 Radiomika</button>
-      <button id="riskBtn" title="Tanlangan massa uchun benign/malignant (xavf) tahlili — radiomika klassifikatori" hidden>🔬 Xavf tahlili</button>
-      <button id="cStoreBtn" title="DICOM'ni PACS serverga yuborish" hidden>📤 PACS</button>
-      <select id="tplSelect" title="Annotation template'ni qo'llash" hidden></select>
-      <button id="tplSaveBtn" title="Joriy annotatsiyalarni template sifatida saqlash" hidden>💾 Tpl</button>
+      <!-- Eksport formatlari — ixcham ochiluvchi menyu -->
+      <div class="tb-menu">
+        <button type="button" class="tb-menu-btn" id="exportMenuBtn" title="Eksport formatlari">⤓ Eksport ▾</button>
+        <div class="tb-menu-panel" hidden>
+          <button id="exportBtn" title="Barcha annotatsiyalarni COCO JSON sifatida yuklab olish">⤓ COCO</button>
+          <button id="exportYoloBtn" title="Barcha annotatsiyalarni YOLO (.txt) dataset (ZIP) sifatida yuklab olish">⤓ YOLO</button>
+          <button id="exportVocBtn" title="Barcha annotatsiyalarni Pascal VOC (XML, ZIP) sifatida yuklab olish">⤓ VOC</button>
+          <button id="exportCsvBtn" title="Barcha annotatsiyalarni CSV jadval sifatida yuklab olish">⤓ CSV</button>
+          <button id="srBtn" title="Annotatsiyalarni DICOM-SR sifatida yuklab olish" hidden>📄 DICOM-SR</button>
+          <button id="segBtn" title="Annotatsiyalarni DICOM-SEG (pixel mask) sifatida yuklab olish" hidden>🖼 DICOM-SEG</button>
+          <button id="maskPngBtn" title="Joriy rasm uchun segmentatsiya maskasi — PNG (label-indexed)" hidden>🎭 Mask PNG</button>
+          <button id="maskNiftiBtn" title="Joriy rasm uchun segmentatsiya maskasi — NIfTI (.nii.gz)" hidden>🎭 Mask NIfTI</button>
+        </div>
+      </div>
+      <!-- Qo'shimcha asboblar — ixcham ochiluvchi menyu -->
+      <div class="tb-menu">
+        <button type="button" class="tb-menu-btn" id="moreMenuBtn" title="Qo'shimcha asboblar" hidden>🛠 Ko'proq ▾</button>
+        <div class="tb-menu-panel" hidden>
+          <button id="deidBtn" title="PHI tahlil va anonimlashtirilgan DICOM yuklab olish" hidden>🛡 De-ID</button>
+          <button id="radiomicsBtn" title="Tanlangan annotatsiya uchun radiomika tahlili (ROI bo'yicha 60 ta belgi)" hidden>📊 Radiomika</button>
+          <button id="riskBtn" title="Tanlangan massa uchun benign/malignant (xavf) tahlili — radiomika klassifikatori" hidden>🔬 Xavf tahlili</button>
+          <button id="cStoreBtn" title="DICOM'ni PACS serverga yuborish" hidden>📤 PACS</button>
+          <select id="tplSelect" title="Annotation template'ni qo'llash" hidden></select>
+          <button id="tplSaveBtn" title="Joriy annotatsiyalarni template sifatida saqlash" hidden>💾 Tpl saqlash</button>
+        </div>
+      </div>
       <span class="presence" id="presencePill" hidden title="Real vaqtda hamkorlar"></span>
     </div>
 

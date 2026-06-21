@@ -1078,6 +1078,7 @@ async function openItem(it) {
   $('radiomicsBtn').hidden = false;
   $('riskBtn').hidden = false;
   $('cStoreBtn').hidden = false;
+  $('moreMenuBtn').hidden = false;
   $('tplSelect').hidden = false;
   $('tplSaveBtn').hidden = false;
   refreshTemplates().catch(() => {});
@@ -1627,6 +1628,7 @@ function clearViewer() {
   $('radiomicsBtn').hidden = true;
   $('riskBtn').hidden = true;
   $('cStoreBtn').hidden = true;
+  $('moreMenuBtn').hidden = true;
   $('tplSelect').hidden = true;
   $('tplSaveBtn').hidden = true;
   renderSvg();
@@ -4777,6 +4779,36 @@ function annotationDiffSummary(prev, next) {
 $('historyCloseBtn').addEventListener('click', () => { $('historyModal').hidden = true; });
 $('radiomicsCloseBtn').addEventListener('click', () => { $('radiomicsModal').hidden = true; });
 $('riskCloseBtn').addEventListener('click', () => { $('riskModal').hidden = true; });
+
+// Toolbar ochiluvchi menyulari (⤓ Eksport / 🛠 Ko'proq) — ixchamlik uchun
+(function bindToolbarMenus() {
+  function closeAll(except) {
+    document.querySelectorAll('.tb-menu-panel').forEach(p => {
+      if (p !== except) p.hidden = true;
+    });
+    document.querySelectorAll('.tb-menu-btn').forEach(b => b.classList.remove('open'));
+  }
+  document.querySelectorAll('.tb-menu-btn').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const panel = btn.nextElementSibling;
+      const willOpen = panel.hidden;
+      closeAll(willOpen ? panel : null);
+      panel.hidden = !willOpen;
+      btn.classList.toggle('open', willOpen);
+    });
+  });
+  // Menyu ichidagi tugma bosilsa — menyuni yopamiz (select esa ochiq qoladi)
+  document.querySelectorAll('.tb-menu-panel').forEach(panel => {
+    panel.addEventListener('click', (e) => {
+      if (e.target.closest('button')) closeAll();
+    });
+  });
+  // Tashqariga bosilsa — barchasini yopamiz
+  document.addEventListener('click', (e) => {
+    if (!e.target.closest('.tb-menu')) closeAll();
+  });
+})();
 
 // Toolbar: benign/malignant (xavf) tahlili — tanlangan massa ROI uchun
 $('riskBtn').addEventListener('click', () => {
