@@ -32,6 +32,7 @@ from . import dicom_seg as dseg
 from . import dicom_sr as dsr
 from . import exporters as exporters
 from . import radiomics as radiomics_mod
+from . import radiomics_clf as radclf
 from . import inference as inf
 from . import pacs as pacs_mod
 from . import ws as ws_mod
@@ -3206,6 +3207,44 @@ def get_radiomics_csv(
         media_type="text/csv; charset=utf-8",
         headers={"Content-Disposition": f'attachment; filename="{base}_radiomics_{stamp}.csv"'},
     )
+
+
+@app.get("/api/radiomics/classifier/status")
+def radiomics_clf_status(_user: dict = Depends(auth_mod.require_user)):
+    """Benign/malignant klassifikatorning holati (o'qitilganmi, metrikalari)."""
+    return radclf.model_info()
+
+
+@app.get("/api/radiomics/classify")
+def radiomics_classify(
+    source: str,
+    ref: str,
+    annotation_id: str,
+    bins: int = 32,
+    _user: dict = Depends(auth_mod.require_user),
+):
+    """Tanlangan annotatsiya (massa ROI) uchun benign/malignant bashorati.
+
+    QAROR QO'LLAB-QUVVATLASH — radiologning yakuniy tashxisini almashtirmaydi.
+    """
+    _validate_source(source)
+    _validate_ref(source, ref)
+    if not radclf.is_trained():
+        raise HTTPException(409, "klassifikator hali o'qitilmagan "
+                            "(scripts/train_radiomics_clf.py orqali o'qiting)")
+    bins = max(8, min(128, int(bins)))
+    _meta, items = _radiomics_for(source, ref, bins, only_id=annotation_id)
+    it = items[0]
+    try:
+        pred = radclf.predict_one(it["features"], it.get("bi_rads"))
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(500, f"klassifikatsiya xato: {e}")
+    return {
+        "annotation_id": it["annotation_id"],
+        "lesion_label": it.get("label"),
+        "bi_rads": it.get("bi_rads") or "",
+        **pred,
+    }
 
 
 @app.get("/api/stats/local_dicom")

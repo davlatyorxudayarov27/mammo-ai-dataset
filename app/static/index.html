@@ -297,6 +297,16 @@
   </div>
 </div>
 
+<div class="modal" id="riskModal" hidden>
+  <div class="modal-card">
+    <div class="modal-head">
+      <h2>🔬 Xavf tahlili (benign / malignant)</h2>
+      <button class="modal-close" id="riskCloseBtn">✕</button>
+    </div>
+    <div class="modal-body" id="riskBody"></div>
+  </div>
+</div>
+
 <div class="modal" id="adminModal" hidden>
   <div class="modal-card wide">
     <div class="modal-head">
@@ -492,6 +502,7 @@
       <button id="maskPngBtn" title="Joriy rasm uchun segmentatsiya maskasi — PNG (label-indexed)" hidden>🎭 Mask PNG</button>
       <button id="maskNiftiBtn" title="Joriy rasm uchun segmentatsiya maskasi — NIfTI (.nii.gz)" hidden>🎭 NIfTI</button>
       <button id="radiomicsBtn" title="Tanlangan annotatsiya uchun radiomika tahlili (ROI bo'yicha 60 ta belgi)" hidden>📊 Radiomika</button>
+      <button id="riskBtn" title="Tanlangan massa uchun benign/malignant (xavf) tahlili — radiomika klassifikatori" hidden>🔬 Xavf tahlili</button>
       <button id="cStoreBtn" title="DICOM'ni PACS serverga yuborish" hidden>📤 PACS</button>
       <select id="tplSelect" title="Annotation template'ni qo'llash" hidden></select>
       <button id="tplSaveBtn" title="Joriy annotatsiyalarni template sifatida saqlash" hidden>💾 Tpl</button>

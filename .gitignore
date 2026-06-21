@@ -90,3 +90,6 @@ TADQIQOTCHI_QOLLANMA.pdf
 dissertation/
 paper/
 
+
+# Radiomika klassifikator modeli (real patologiya yorliqlarida o'qitiladi)
+app/models/*.joblib

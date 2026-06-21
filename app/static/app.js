@@ -1074,6 +1074,7 @@ async function openItem(it) {
   $('maskPngBtn').hidden = false;
   $('maskNiftiBtn').hidden = false;
   $('radiomicsBtn').hidden = false;
+  $('riskBtn').hidden = false;
   $('cStoreBtn').hidden = false;
   $('tplSelect').hidden = false;
   $('tplSaveBtn').hidden = false;
@@ -1622,6 +1623,7 @@ function clearViewer() {
   $('maskPngBtn').hidden = true;
   $('maskNiftiBtn').hidden = true;
   $('radiomicsBtn').hidden = true;
+  $('riskBtn').hidden = true;
   $('cStoreBtn').hidden = true;
   $('tplSelect').hidden = true;
   $('tplSaveBtn').hidden = true;
@@ -4771,6 +4773,87 @@ function annotationDiffSummary(prev, next) {
 
 $('historyCloseBtn').addEventListener('click', () => { $('historyModal').hidden = true; });
 $('radiomicsCloseBtn').addEventListener('click', () => { $('radiomicsModal').hidden = true; });
+$('riskCloseBtn').addEventListener('click', () => { $('riskModal').hidden = true; });
+
+// Toolbar: benign/malignant (xavf) tahlili — tanlangan massa ROI uchun
+$('riskBtn').addEventListener('click', () => {
+  const visible = state.annotations.filter(a => a.frame === state.frame);
+  if (!visible.length) {
+    alert("Bu kadrda annotatsiya yo'q. Avval massani BBox yoki Poly bilan belgilang.");
+    return;
+  }
+  let id = state.selectedId;
+  if (!id || !visible.some(a => a.id === id)) {
+    if (visible.length === 1) id = visible[0].id;
+    else { alert("Avval massani tanlang (ro'yxatdan yoki rasm ustida bosib)."); return; }
+  }
+  showMalignancyFor(id);
+});
+
+async function showMalignancyFor(annotationId) {
+  if (!state.current) return;
+  if (state.dirty) { try { await saveAnnotations(); } catch (e) { /* baribir urinib ko'ramiz */ } }
+  const body = $('riskBody');
+  body.innerHTML = '<div class="report-empty">Hisoblanmoqda…</div>';
+  $('riskModal').hidden = false;
+  try {
+    const res = await fetch(
+      `/api/radiomics/classify?source=${refSource()}&ref=${encodeURIComponent(refValue())}` +
+      `&annotation_id=${encodeURIComponent(annotationId)}`,
+      { headers: { 'Authorization': `Bearer ${getToken()}` } },
+    );
+    if (!res.ok) {
+      let detail = '';
+      try { detail = (await res.json()).detail || ''; } catch (e) {}
+      const hint = res.status === 409
+        ? "Klassifikator hali o'qitilmagan. Patologiya yorliqlari bilan o'qiting: scripts/train_radiomics_clf.py"
+        : res.status === 404 ? "Avval annotatsiyani saqlang."
+        : detail || `Xato ${res.status}`;
+      body.innerHTML = `<div class="report-empty">${hint}</div>`;
+      return;
+    }
+    renderMalignancy(body, await res.json());
+  } catch (e) {
+    body.innerHTML = `<div class="report-empty">Tarmoq xatosi: ${e.message}</div>`;
+  }
+}
+
+function renderMalignancy(body, d) {
+  const pMal = Math.round((d.p_malignant || 0) * 100);
+  const pBen = 100 - pMal;
+  const isMal = d.label === 'malignant';
+  const col = isMal ? '#ff4d4f' : '#28d97f';
+  // BI-RADS bilan solishtirish
+  const bi = (d.bi_rads || '').toUpperCase();
+  const biMal = ['4', '4A', '4B', '4C', '5', '6'].includes(bi);
+  let agree = '';
+  if (bi) {
+    const concord = (isMal && biMal) || (!isMal && !biMal);
+    agree = concord
+      ? `<div class="risk-note ok">✓ Radiomika va BI-RADS ${bi} mos keladi — ishonch yuqori</div>`
+      : `<div class="risk-note warn">⚠ Radiomika (${d.label_uz}) BI-RADS ${bi} bilan kelishmaydi — diqqat bilan ko'rib chiqing</div>`;
+  }
+  const auc = (d.cv_auc != null) ? `model AUC≈${d.cv_auc}` : '';
+  body.innerHTML = `
+    <div class="risk-head" style="color:${col}">
+      <span class="risk-verdict">${isMal ? '🔴' : '🟢'} ${d.label_uz}</span>
+      <span class="risk-conf">ishonch ${Math.round((d.confidence || 0) * 100)}%</span>
+    </div>
+    <div class="risk-bar">
+      <div class="risk-bar-mal" style="width:${pMal}%">${pMal > 12 ? pMal + '% xavfli' : ''}</div>
+      <div class="risk-bar-ben" style="width:${pBen}%">${pBen > 12 ? pBen + '% xavfsiz' : ''}</div>
+    </div>
+    <div class="risk-meta">
+      <span>Massa: <b>${d.lesion_label || '—'}</b></span>
+      <span>BI-RADS: <b>${bi || '—'}</b></span>
+      <span>${d.used_birads ? 'BI-RADS belgi sifatida ishlatildi' : 'faqat radiomika'}</span>
+      ${auc ? `<span>${auc}</span>` : ''}
+    </div>
+    ${agree}
+    <div class="risk-disclaimer">⚕ Bu — QAROR QO'LLAB-QUVVATLASH vositasi, tashxis emas.
+      Yakuniy qarorni radiolog patologiya va klinik ma'lumot asosida qabul qiladi.</div>
+  `;
+}
 
 // Toolbar button: radiomics for the selected annotation (or the only one).
 $('radiomicsBtn').addEventListener('click', () => {

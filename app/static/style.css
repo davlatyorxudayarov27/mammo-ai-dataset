@@ -1218,3 +1218,34 @@ main.viewer {
   color: var(--text); padding: 4px 8px; border-radius: 3px; font-size: 12px;
 }
 .report-search button { padding: 4px 10px; }
+
+/* ===== Xavf tahlili (benign/malignant klassifikator) ===== */
+#riskBtn.tool { }
+.risk-head {
+  display: flex; justify-content: space-between; align-items: baseline;
+  font-size: 18px; font-weight: 700; margin-bottom: 10px;
+}
+.risk-head .risk-conf { font-size: 13px; opacity: 0.8; color: var(--text); }
+.risk-bar {
+  display: flex; height: 30px; border-radius: 6px; overflow: hidden;
+  border: 1px solid var(--border); margin-bottom: 12px; background: #1a1a1a;
+}
+.risk-bar-mal { background: linear-gradient(90deg,#ff7875,#ff4d4f); }
+.risk-bar-ben { background: linear-gradient(90deg,#28d97f,#1aa860); }
+.risk-bar-mal, .risk-bar-ben {
+  display: flex; align-items: center; justify-content: center;
+  color: #fff; font-size: 12px; font-weight: 700; white-space: nowrap;
+  transition: width 0.4s ease;
+}
+.risk-meta {
+  display: flex; flex-wrap: wrap; gap: 14px; font-size: 13px;
+  color: var(--muted); margin-bottom: 10px;
+}
+.risk-meta b { color: var(--text); }
+.risk-note { padding: 8px 10px; border-radius: 5px; font-size: 13px; margin-bottom: 10px; }
+.risk-note.ok { background: rgba(40,217,127,0.12); color: #8ff0c0; }
+.risk-note.warn { background: rgba(255,193,7,0.14); color: #ffd24d; }
+.risk-disclaimer {
+  font-size: 12px; color: var(--muted); border-top: 1px solid var(--border);
+  padding-top: 8px; line-height: 1.5;
+}
