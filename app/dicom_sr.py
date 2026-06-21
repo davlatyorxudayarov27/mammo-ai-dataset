@@ -254,6 +254,8 @@ def annotations_to_sr(
             text_lines.insert(1, f"  BI-RADS: {bi_rads}")
         if a.get("created_by"):
             text_lines.append(f"  yaratdi: {a.get('created_by')}")
+        if a.get("ai_source"):
+            text_lines.append("  AI batch (izoh): AI batch tomonidan yaratilgan")
         if a.get("reviewed_by"):
             text_lines.append(f"  ko'rib chiqdi: {a.get('reviewed_by')}")
         if a.get("review_note"):

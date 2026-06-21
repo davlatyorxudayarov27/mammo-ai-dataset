@@ -1879,10 +1879,28 @@ def local_list(subdir: str = "", limit: int = 1000):
     except PermissionError:
         raise HTTPException(403, "permission denied")
 
+    # Har bir bevosita ichki papka uchun ichidagi (rekursiv) annotatsiyalar yig'indisi.
+    prefix = (subdir.rstrip("/") + "/") if subdir else ""
+    dir_counts: dict[str, int] = {}
+    for entry in annot_store.iter_all(ANNOT_DIR):
+        if entry.get("source") != "local":
+            continue
+        ref = entry.get("ref") or ""
+        if prefix and not ref.startswith(prefix):
+            continue
+        rest = ref[len(prefix):]
+        if "/" not in rest:
+            continue  # joriy papkadagi to'g'ridan-to'g'ri fayl (papka ichida emas)
+        n = len(entry.get("annotations") or [])
+        if n:
+            seg = rest.split("/", 1)[0]
+            dir_counts[seg] = dir_counts.get(seg, 0) + n
+
     for p in entries[:limit]:
         rel = p.relative_to(LOCAL_ROOT).as_posix()
         if p.is_dir():
-            dirs.append({"name": p.name, "path": rel})
+            dirs.append({"name": p.name, "path": rel,
+                         "annotation_count": dir_counts.get(p.name, 0)})
         elif _looks_like_dicom(p):
             try:
                 size = p.stat().st_size
@@ -2385,6 +2403,7 @@ def list_annotations(
                 "bi_rads": a.get("bi_rads"),
                 "status": ann_status,
                 "created_by": a.get("created_by"),
+                "ai_source": a.get("ai_source"),
                 "updated_by": a.get("updated_by"),
                 "reviewed_by": a.get("reviewed_by"),
                 "review_note": a.get("review_note"),

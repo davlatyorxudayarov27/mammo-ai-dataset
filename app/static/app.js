@@ -332,7 +332,8 @@ async function loadDashboard() {
     sub2.style.opacity = '0.7';
     const updated = (it.updated_at || '').slice(0, 16).replace('T', ' ');
     const reviewer = it.reviewed_by ? ` · ${it.status === 'approved' ? '✓' : '✗'}${it.reviewed_by}` : '';
-    sub2.textContent = `${it.created_by || '—'} · ${updated}${reviewer}`;
+    const aiMark = it.ai_source ? ' · 🤖 AI batch (izoh)' : '';
+    sub2.textContent = `${it.created_by || '—'}${aiMark} · ${updated}${reviewer}`;
     left.appendChild(sub2);
 
     if (it.review_note && it.status === 'rejected') {
@@ -933,6 +934,7 @@ function renderFileList(ul, items) {
     name.className = 'name';
     name.textContent = it.label;
     if (it.annoCount && it.annoCount > 0) {
+      name.classList.add('has-anno');
       const pill = document.createElement('span');
       pill.className = 'anno-pill';
       pill.textContent = it.annoCount;
@@ -3505,7 +3507,7 @@ async function loadLocalDir(subdir) {
     $('crumb').textContent = subdir ? '/' + subdir : '/';
     const items = [];
     if (subdir) items.push({ kind: 'dir', label: '..', path: data.parent });
-    for (const d of data.dirs) items.push({ kind: 'dir', label: d.name, path: d.path });
+    for (const d of data.dirs) items.push({ kind: 'dir', label: d.name, path: d.path, annoCount: d.annotation_count || 0 });
     for (const f of data.files) items.push({
       kind: 'local', label: f.name, sub: humanSize(f.size),
       path: f.path, annoCount: f.annotation_count || 0,
@@ -4542,9 +4544,10 @@ function renderAnnoList() {
     const audit = document.createElement('div');
     audit.className = 'audit';
     const created = a.created_by ? `${a.created_by}` : '—';
+    const aiMark = a.ai_source ? ' · 🤖 AI batch (izoh)' : '';
     const updated = a.updated_by && a.updated_by !== a.created_by ? ` · oxirgi: ${a.updated_by}` : '';
     const reviewed = a.reviewed_by ? ` · ${status === 'approved' ? '✓' : '✗'} ${a.reviewed_by}` : '';
-    audit.textContent = `Yaratdi: ${created}${updated}${reviewed}`;
+    audit.textContent = `Yaratdi: ${created}${aiMark}${updated}${reviewed}`;
     info.appendChild(audit);
 
     if (a.review_note && status === 'rejected') {

@@ -266,6 +266,8 @@ aside.meta-pane {
   border: 1px solid rgba(40,217,127,0.4); border-radius: 9px;
   font-size: 10px; font-weight: 600;
 }
+/* Annotatsiyasi bor fayl/papka nomi boshqa (yashil) rangda */
+.file-list .name.has-anno { color: var(--ok); }
 
 .pane { padding: 10px; }
 .upload-zone {

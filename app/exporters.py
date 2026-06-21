@@ -191,7 +191,8 @@ def build_csv(images: list[dict]) -> bytes:
                 x, y, wn, hn, px[0], px[1], px[2], px[3],
                 len(pts) if a.get("type") == "polygon" else "",
                 a.get("created_by", ""), a.get("reviewed_by", ""),
-                str(a.get("note") or "").replace("\n", " ").replace("\r", " "),
+                (str(a.get("note") or "").replace("\n", " ").replace("\r", " ")
+                 + (" · AI batch (izoh)" if a.get("ai_source") else "")).strip(" ·"),
             ])
     # BOM so Excel opens UTF-8 correctly.
     return ("﻿" + buf.getvalue()).encode("utf-8")
