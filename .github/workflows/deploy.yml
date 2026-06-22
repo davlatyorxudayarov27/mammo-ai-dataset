@@ -1,0 +1,29 @@
+name: Deploy (prod)
+
+# Push qilinishi bilan serverga (10.10.0.75) avtomatik deploy.
+# Serverdagi "self-hosted runner" (label: mamograf) orqali ishlaydi —
+# 10.10.0.75 ichki IP bo'lgani uchun GitHub bulutli runnerlari unga ulanolmaydi.
+on:
+  push:
+    branches: [feature/multilabel-radiomics-ensemble]
+  workflow_dispatch: {}   # GitHub UI'dan "Run workflow" tugmasi bilan ham
+
+concurrency:
+  group: deploy-prod
+  cancel-in-progress: false   # deploylar bir-birini bo'lmasin, navbat bilan
+
+jobs:
+  deploy:
+    runs-on: [self-hosted, mamograf]
+    steps:
+      - name: Git pull + Docker rebuild
+        run: |
+          set -euo pipefail
+          cd /home/ai/plan_project_new
+          echo "== Git yangilanmoqda (${GITHUB_REF_NAME}) =="
+          git fetch origin --prune
+          git reset --hard "origin/${GITHUB_REF_NAME}"
+          echo "== Docker qayta qurilmoqda =="
+          docker compose -f docker-compose.prod.yml up -d --build
+          echo "== Holat =="
+          docker compose -f docker-compose.prod.yml ps
