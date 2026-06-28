@@ -6,6 +6,10 @@
 <title>🎓 Model Studio — MAMOGRAF</title>
 <link rel="stylesheet" href="style.css">
 <style>
+  /* style.css'dagi global "body{overflow:hidden;height:100%}" (asosiy ilova uchun)
+     train.html'ga ham meros bo'lib, sahifa viewport'dan baland bo'lsa skrolni o'chiradi.
+     Shu yerda override qilamiz — vertikal skrol qaytadi. */
+  html, body { height: auto; min-height: 100%; overflow-x: hidden; overflow-y: auto; }
   body { background: var(--bg, #0a0f1c); color: var(--text, #eee); font-family: -apple-system, sans-serif; margin: 0; }
   .ts-header { padding: 12px 20px; background: var(--panel, #1a1f2e); border-bottom: 1px solid var(--border, #333); display: flex; align-items: center; gap: 14px; }
   .ts-header h1 { font-size: 18px; margin: 0; }
