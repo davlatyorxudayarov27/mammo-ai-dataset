@@ -1790,17 +1790,32 @@ def training_prepare(
     img_ext = "jpg" if body.image_format.lower() in ("jpg", "jpeg") else "png"
 
     # 1-bosqich: annotation fayllarni o'qib, tasniflash
+    #   upload__<id>.json   -> UPLOAD_DIR/<id>.dcm
+    #   local__<hash>.json  -> annotatsiya ichidagi "ref" (LOCAL_DICOM_ROOT ostidagi nisbiy yo'l)
     items: list[dict] = []
     label_set: set[str] = set()
-    for ann_path in sorted(ANNOT_DIR.glob("upload__*.json")):
-        file_id = ann_path.stem.replace("upload__", "", 1)
-        dcm = UPLOAD_DIR / f"{file_id}.dcm"
-        if not dcm.exists():
-            continue
+
+    def _read_ann(ann_path: Path, prefix: str) -> None:
+        file_id = ann_path.stem.replace(f"{prefix}__", "", 1)
         try:
             data = json.loads(ann_path.read_text(encoding="utf-8"))
         except Exception:
-            continue
+            return
+        # DICOM yo'lini topish
+        if prefix == "upload":
+            dcm = UPLOAD_DIR / f"{file_id}.dcm"
+            if not dcm.exists():
+                return
+        else:  # local — yo'l annotatsiya ichidagi "ref" da saqlangan
+            ref = str(data.get("ref") or "").strip()
+            if not ref:
+                return
+            try:
+                dcm = _resolve_local(ref)
+            except Exception:
+                return
+            if not dcm.exists():
+                return
         anns = data.get("annotations") or []
         # Filtrlar
         kept = []
@@ -1820,8 +1835,8 @@ def training_prepare(
                 kept.append({"label": str(a.get("label", "") or "lesion"), "bbox": [bx, by, bw, bh]})
                 label_set.add(kept[-1]["label"])
         if not kept:
-            continue
-        # Study guruhi uchun PatientID + StudyUID o'qiymiz
+            return
+        # Study guruhi uchun PatientID + StudyUID o'qiymiz (patient-aware split uchun)
         try:
             ds = pydicom.dcmread(str(dcm), stop_before_pixels=True, force=True)
             pid = str(getattr(ds, "PatientID", "") or "")
@@ -1830,6 +1845,11 @@ def training_prepare(
             pid = suid = ""
         group_key = pid or suid or file_id
         items.append({"file_id": file_id, "dcm": dcm, "annotations": kept, "group": group_key})
+
+    for ann_path in sorted(ANNOT_DIR.glob("upload__*.json")):
+        _read_ann(ann_path, "upload")
+    for ann_path in sorted(ANNOT_DIR.glob("local__*.json")):
+        _read_ann(ann_path, "local")
 
     if not items:
         raise HTTPException(400, "Annotation bo'lgan fayl topilmadi (yoki filtr juda tor)")
