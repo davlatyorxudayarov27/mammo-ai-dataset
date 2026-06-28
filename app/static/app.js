@@ -5507,6 +5507,8 @@ yolo task=detect mode=train model=yolo11n.pt \\
   if (b) b.addEventListener('click', openTrainPrepModal);
   const close = $('tpCloseBtn');
   if (close) close.addEventListener('click', closeTrainPrepModal);
+  const xclose = $('trainPrepXBtn');
+  if (xclose) xclose.addEventListener('click', closeTrainPrepModal);
   const form = $('trainPrepForm');
   if (form) form.addEventListener('submit', submitTrainPrep);
 })();

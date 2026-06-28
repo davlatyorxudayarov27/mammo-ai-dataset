@@ -114,6 +114,71 @@ def update_last_login(user_id: int) -> None:
         c.commit()
 
 
+# --- Brute-force himoyasi (IP'ga bog'liq emas — akkaunt bo'yicha) ------------ #
+MAX_FAILED_LOGINS = 8       # ketma-ket shuncha xatodan keyin qulflanadi
+LOCK_MINUTES = 15          # qulf davomiyligi (daqiqa)
+PASSWORD_MIN_LEN = 8       # minimal parol uzunligi
+
+
+def lock_seconds_left(user: dict) -> int:
+    """Akkaunt qulflangan bo'lsa, qolgan soniya; aks holda 0."""
+    lu = user.get("locked_until")
+    if not lu:
+        return 0
+    try:
+        until = datetime.fromisoformat(lu)
+    except Exception:
+        return 0
+    if until.tzinfo is None:
+        until = until.replace(tzinfo=timezone.utc)
+    left = (until - datetime.now(timezone.utc)).total_seconds()
+    return int(left) if left > 0 else 0
+
+
+def record_failed_login(username: str) -> int:
+    """Xato urinishni qayd qiladi. Chegaraga yetsa — akkauntni qulflaydi.
+    Qolgan qulf soniyasini qaytaradi (0 = hali qulflanmagan)."""
+    now = datetime.now(timezone.utc)
+    with db_mod.get_conn() as c:
+        row = c.execute(
+            "SELECT failed_logins FROM users WHERE username = ?", (username,)
+        ).fetchone()
+        if not row:
+            return 0
+        fails = (row["failed_logins"] or 0) + 1
+        if fails >= MAX_FAILED_LOGINS:
+            until = (now + timedelta(minutes=LOCK_MINUTES)).isoformat()
+            c.execute(
+                "UPDATE users SET failed_logins = 0, locked_until = ? WHERE username = ?",
+                (until, username),
+            )
+            c.commit()
+            return LOCK_MINUTES * 60
+        c.execute(
+            "UPDATE users SET failed_logins = ? WHERE username = ?", (fails, username)
+        )
+        c.commit()
+    return 0
+
+
+def reset_failed_login(username: str) -> None:
+    """Muvaffaqiyatli kirishdan keyin hisoblagich va qulfni tozalaydi."""
+    with db_mod.get_conn() as c:
+        c.execute(
+            "UPDATE users SET failed_logins = 0, locked_until = NULL WHERE username = ?",
+            (username,),
+        )
+        c.commit()
+
+
+def validate_password_strength(pw: str) -> None:
+    """Zaif parolni rad etadi. Yaroqsiz bo'lsa ValueError ko'taradi."""
+    if pw is None or len(pw) < PASSWORD_MIN_LEN:
+        raise ValueError(f"Parol kamida {PASSWORD_MIN_LEN} ta belgidan iborat bo'lsin")
+    if pw.isdigit() or pw.isalpha():
+        raise ValueError("Parol harf va raqamlar aralashmasidan iborat bo'lsin")
+
+
 def public_user(row: dict) -> dict:
     return {
         "id": row["id"],

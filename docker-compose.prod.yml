@@ -17,6 +17,12 @@ services:
       - LOCAL_DICOM_ROOT=/data/dicom
       - JWT_SECRET=${JWT_SECRET:-}
       - AUTO_DEIDENTIFY=${AUTO_DEIDENTIFY:-1}
+      # Masofaviy GPU training server (10.10.0.72, RTX3090). Bo'sh bo'lsa — lokal training.
+      - REMOTE_TRAIN_URL=${REMOTE_TRAIN_URL:-}
+      - REMOTE_TRAIN_TOKEN=${REMOTE_TRAIN_TOKEN:-}
+      # Hisobot uchun lokal LLM (Ollama) — RTX3090 serverda. Bo'sh bo'lsa 127.0.0.1.
+      - OLLAMA_HOST=${OLLAMA_HOST:-}
+      - OLLAMA_MODEL=${OLLAMA_MODEL:-qwen2.5:7b}
     volumes:
       - app_uploads:/app/app/uploads
       - app_annotations:/app/app/annotations

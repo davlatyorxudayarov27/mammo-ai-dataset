@@ -199,6 +199,9 @@ def get_conn() -> sqlite3.Connection:
 _MIGRATIONS = [
     "ALTER TABLE users ADD COLUMN totp_secret TEXT",
     "ALTER TABLE users ADD COLUMN totp_enrolled INTEGER NOT NULL DEFAULT 0",
+    # Brute-force himoyasi: ketma-ket xato urinishlar va vaqtinchalik qulf
+    "ALTER TABLE users ADD COLUMN failed_logins INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE users ADD COLUMN locked_until TEXT",
 ]
 
 

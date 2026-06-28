@@ -35,6 +35,7 @@ from . import radiomics as radiomics_mod
 from . import radiomics_clf as radclf
 from . import inference as inf
 from . import pacs as pacs_mod
+from . import remote_train as remote_train
 from . import ws as ws_mod
 from .dicom_utils import (
     NoPixelDataError, auto_window, extract_sr_content, load_frame_array, quick_summary,
@@ -249,6 +250,12 @@ async def security_headers(request: Request, call_next):
     response.headers["Referrer-Policy"] = "no-referrer"
     response.headers["Permissions-Policy"] = "interest-cohort=()"
     response.headers["Content-Security-Policy"] = _CSP
+    # Frontend statikasi (app.js/style.css/index.html) brauzerда eskirib qolmasligi
+    # uchun har doim qayta tekshirilsin. ETag/Last-Modified bor — o'zgarmasa 304 (tez),
+    # o'zgargan bo'lsa yangi fayl darrov keladi (hard-refresh shart emas).
+    _path = request.url.path
+    if _path == "/" or _path.endswith((".js", ".css", ".html")):
+        response.headers["Cache-Control"] = "no-cache, must-revalidate"
     return response
 
 
@@ -300,7 +307,21 @@ def auth_login(request: Request, body: LoginBody):
     user = auth_mod.get_user_by_username(body.username)
     if not user or not user.get("is_active"):
         raise HTTPException(401, "invalid credentials")
+    # Akkaunt bo'yicha qulf (IP'ga bog'liq emas — X-Forwarded-For spoofing'dan himoya)
+    left = auth_mod.lock_seconds_left(user)
+    if left > 0:
+        raise HTTPException(
+            status_code=429,
+            detail=f"Juda ko'p xato urinish. Akkaunt vaqtincha qulflandi — "
+                   f"{left // 60 + 1} daqiqadan keyin urinib ko'ring.",
+        )
     if not auth_mod.verify_password(body.password, user["password_hash"]):
+        locked = auth_mod.record_failed_login(body.username)
+        if locked:
+            raise HTTPException(
+                status_code=429,
+                detail=f"Juda ko'p xato urinish. Akkaunt {locked // 60} daqiqaga qulflandi.",
+            )
         raise HTTPException(401, "invalid credentials")
     if user.get("totp_enrolled"):
         if not body.totp_code:
@@ -309,7 +330,14 @@ def auth_login(request: Request, body: LoginBody):
                 detail={"error": "totp_required", "message": "TOTP kodi kerak"},
             )
         if not auth_mod.verify_totp(user.get("totp_secret"), body.totp_code):
+            locked = auth_mod.record_failed_login(body.username)
+            if locked:
+                raise HTTPException(
+                    status_code=429,
+                    detail=f"Juda ko'p xato urinish. Akkaunt {locked // 60} daqiqaga qulflandi.",
+                )
             raise HTTPException(401, "invalid TOTP code")
+    auth_mod.reset_failed_login(body.username)
     auth_mod.update_last_login(user["id"])
     token, exp = auth_mod.issue_token(user)
     pub = auth_mod.public_user(user)
@@ -418,8 +446,10 @@ def auth_change_password(
     row = auth_mod.get_user_by_username(user["sub"])
     if not row or not auth_mod.verify_password(body.current_password, row["password_hash"]):
         raise HTTPException(401, "current password incorrect")
-    if len(body.new_password) < 4:
-        raise HTTPException(400, "new password too short")
+    try:
+        auth_mod.validate_password_strength(body.new_password)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
     auth_mod.update_password(user["sub"], body.new_password)
     return {"ok": True}
 
@@ -446,8 +476,10 @@ def admin_create_user(
         raise HTTPException(400, f"role must be one of {auth_mod.ROLES}")
     if not body.username or not body.username.strip():
         raise HTTPException(400, "username required")
-    if len(body.password) < 4:
-        raise HTTPException(400, "password too short (min 4)")
+    try:
+        auth_mod.validate_password_strength(body.password)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
     if auth_mod.get_user_by_username(body.username):
         raise HTTPException(409, "username already exists")
     user = auth_mod.create_user(
@@ -514,8 +546,10 @@ def admin_reset_password(
 ):
     if not auth_mod.get_user_by_username(username):
         raise HTTPException(404, "user not found")
-    if len(body.new_password) < 4:
-        raise HTTPException(400, "password too short (min 4)")
+    try:
+        auth_mod.validate_password_strength(body.new_password)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
     auth_mod.update_password(username, body.new_password)
     return {"ok": True}
 
@@ -822,10 +856,45 @@ def _monitor_training(run_id: str, proc: "subprocess.Popen", logf) -> None:
 
 
 def _launch_training(run_id: str, params: dict) -> None:
-    """Training'ni alohida subprocess sifatida ishga tushiradi (Stop mumkin bo'lishi uchun)."""
+    """Training'ni alohida subprocess sifatida ishga tushiradi (Stop mumkin bo'lishi uchun).
+
+    REMOTE_TRAIN_URL o'rnatilgan bo'lsa — lokal subprocess o'rniga GPU serverga
+    (remote_train) jo'natiladi."""
     project_dir = BASE_DIR / "training_runs" / run_id
     project_dir.mkdir(parents=True, exist_ok=True)
     log_path = _training_log_path(run_id)
+
+    # --- Masofaviy (GPU server) yo'li -------------------------------------- #
+    if remote_train.ENABLED:
+        state = TRAINING_RUNS.get(run_id, {})
+        try:
+            remote_train.submit(run_id, params, str(inf.MODELS_DIR))
+            log_path.write_text("# Masofaviy GPU serverga jo'natildi: "
+                                f"{remote_train.REMOTE_URL}\n", encoding="utf-8")
+            state.update({
+                "status": "running",
+                "started_at": datetime.now(timezone.utc).isoformat(),
+                "log_path": str(log_path),
+                "project_dir": str(project_dir),
+                "params": params,
+                "remote": True,
+                "remote_url": remote_train.REMOTE_URL,
+            })
+        except Exception as e:  # noqa: BLE001
+            log_path.write_text(f"# Masofaviy training XATO: {e}\n", encoding="utf-8")
+            state.update({
+                "status": "failed",
+                "error": f"Masofaviy GPU serverga jo'natib bo'lmadi: {e}",
+                "started_at": datetime.now(timezone.utc).isoformat(),
+                "finished_at": datetime.now(timezone.utc).isoformat(),
+                "log_path": str(log_path),
+                "project_dir": str(project_dir),
+                "params": params,
+                "remote": True,
+            })
+        TRAINING_RUNS[run_id] = state
+        return
+    # --- Lokal subprocess yo'li (eski xatti-harakat) ---------------------- #
 
     worker_params = dict(params)
     worker_params["run_id"] = run_id
@@ -855,6 +924,85 @@ def _launch_training(run_id: str, params: dict) -> None:
     })
     TRAINING_RUNS[run_id] = state
     threading.Thread(target=_monitor_training, args=(run_id, proc, logf), daemon=True).start()
+
+
+def _deploy_remote_model(run_id: str, state: dict) -> None:
+    """Masofaviy training tugagach best.pt'ni yuklab olib MODELS_DIR'ga joylaydi."""
+    params = state.get("params", {})
+    if not params.get("deploy_after", True):
+        return
+    name_suffix = params.get("project_name") or run_id
+    safe_suffix = re.sub(r"[^A-Za-z0-9_-]+", "_", name_suffix)
+    inf.MODELS_DIR.mkdir(parents=True, exist_ok=True)
+    target = inf.MODELS_DIR / f"trained_{safe_suffix}.pt"
+    data = remote_train.download_best(run_id)
+    target.write_bytes(data)
+    state["model_deployed"] = str(target)
+    state["best_pt"] = str(target)
+
+
+def _remote_status(run_id: str, state: dict, tail: int) -> dict:
+    """GPU serverdan statusni oladi, results.csv/log'ni lokal'ga ko'chiradi
+    (mavjud metrics/plots endpointlari ishlashi uchun) va tugaganda modelni tortadi."""
+    project_dir = Path(state.get("project_dir") or (BASE_DIR / "training_runs" / run_id))
+    try:
+        rs = remote_train.status(run_id, tail)
+    except Exception as e:  # noqa: BLE001
+        # Server vaqtincha javob bermasa — oxirgi ma'lum holatni qaytaramiz
+        out = {k: v for k, v in state.items() if k != "_stop_requested"}
+        out["log_tail"] = (state.get("_last_log") or []) + [f"[masofaviy status xato] {e}"]
+        return {"run_id": run_id, **out}
+
+    # results.csv'ni lokal'ga oynalash (grafiklar uchun)
+    rcsv = rs.get("results_csv")
+    if rcsv:
+        td = project_dir / "train"
+        td.mkdir(parents=True, exist_ok=True)
+        try:
+            (td / "results.csv").write_text(rcsv, encoding="utf-8")
+        except Exception:
+            pass
+
+    log_tail = rs.get("log_tail") or []
+    state["_last_log"] = log_tail
+    lp = state.get("log_path")
+    if lp:
+        try:
+            Path(lp).write_text("\n".join(log_tail), encoding="utf-8")
+        except Exception:
+            pass
+
+    remote_status = rs.get("status", "running")
+    state["is_alive"] = bool(rs.get("is_alive"))
+
+    # Jonli metrikalar — oynalangan results.csv'dan
+    live = _read_results_csv(project_dir)
+    if live:
+        state["last_metrics"] = live[-1]
+        state["epochs_done"] = len(live)
+    elif rs.get("last_metrics"):
+        state["last_metrics"] = rs["last_metrics"]
+
+    if rs.get("error"):
+        state["error"] = rs["error"]
+
+    # Tugagan bo'lsa — modelni bir marta tortib olamiz
+    if remote_status == "done" and not state.get("_deployed"):
+        try:
+            _deploy_remote_model(run_id, state)
+            state["_deployed"] = True
+        except Exception as e:  # noqa: BLE001
+            state["deploy_error"] = f"Model yuklab olinmadi: {e}"
+    if state.get("_stop_requested") and remote_status in ("running", "stopping"):
+        state["status"] = "stopping"
+    else:
+        state["status"] = remote_status
+    if remote_status in ("done", "failed", "stopped"):
+        state.setdefault("finished_at", datetime.now(timezone.utc).isoformat())
+
+    TRAINING_RUNS[run_id] = state
+    out = {k: v for k, v in state.items() if k not in ("_stop_requested", "_last_log")}
+    return {"run_id": run_id, **out, "log_tail": log_tail}
 
 
 class TrainingRunBody(BaseModel):
@@ -897,9 +1045,21 @@ def training_run(
     body: TrainingRunBody,
     _user: dict = Depends(auth_mod.require_user),
 ):
-    """YOLO o'qitishni alohida subprocess'da boshlaydi. Run ID qaytaradi."""
+    """YOLO o'qitishni boshlaydi. Run ID qaytaradi.
+    Masofaviy GPU yoqilgan bo'lsa — avval GPU server tirikligi tekshiriladi."""
     if not Path(body.data_yaml).exists():
         raise HTTPException(400, f"data.yaml topilmadi: {body.data_yaml}")
+    # Masofaviy GPU server: training boshlashdan oldin tirikligini tekshiramiz
+    if remote_train.ENABLED:
+        try:
+            h = remote_train.health()
+        except Exception as e:  # noqa: BLE001
+            raise HTTPException(503,
+                f"GPU server ({remote_train.REMOTE_URL}) javob bermayapti — "
+                f"training boshlanmadi. Server yoqilganini tekshiring. ({e})")
+        if not h.get("cuda"):
+            raise HTTPException(503,
+                "GPU serverga ulanildi, lekin GPU/CUDA topilmadi — training boshlanmadi.")
     run_id = "tr" + datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S") + "_" + uuid.uuid4().hex[:6]
     TRAINING_RUNS[run_id] = {"status": "queued", "queued_at": datetime.now(timezone.utc).isoformat(), "params": body.model_dump()}
     _launch_training(run_id, body.model_dump())
@@ -913,6 +1073,17 @@ def training_stop(run_id: str, _user: dict = Depends(auth_mod.require_user)):
     state = TRAINING_RUNS.get(run_id)
     if not state:
         raise HTTPException(404, f"Run topilmadi: {run_id}")
+    if state.get("remote"):
+        if state.get("status") in ("done", "failed", "stopped"):
+            raise HTTPException(409, "Run allaqachon tugagan")
+        state["_stop_requested"] = True
+        try:
+            remote_train.stop(run_id)
+        except Exception as e:  # noqa: BLE001
+            raise HTTPException(502, f"Masofaviy to'xtatish xatosi: {e}")
+        state["status"] = "stopping"
+        TRAINING_RUNS[run_id] = state
+        return {"run_id": run_id, "status": "stopping"}
     proc = TRAIN_PROCS.get(run_id)
     if proc is None or proc.poll() is not None:
         raise HTTPException(409, "Run hozir ishlamayapti (allaqachon tugagan)")
@@ -993,9 +1164,12 @@ def training_base_models(_user: dict = Depends(auth_mod.require_user)):
 
 @app.get("/api/training/status/{run_id}")
 def training_status(run_id: str, tail: int = 200, _user: dict = Depends(auth_mod.require_user)):
-    state = dict(TRAINING_RUNS.get(run_id) or {})
+    state = TRAINING_RUNS.get(run_id)
     if not state:
         raise HTTPException(404, f"Run topilmadi: {run_id}")
+    if state.get("remote"):
+        return _remote_status(run_id, state, tail)
+    state = dict(state)
     state.pop("_stop_requested", None)
     proc = TRAIN_PROCS.get(run_id)
     state["is_alive"] = bool(proc and proc.poll() is None)
@@ -1311,7 +1485,22 @@ def training_validate(
 @app.get("/api/system/gpu")
 def system_gpu(_user: dict = Depends(auth_mod.require_user)):
     """nvidia-smi orqali GPU holati: VRAM band/jami, utilization, harorat.
-    Hamda torch CUDA'ni ko'ra oladimi — training GPU'da ketishini bildiradi."""
+    Hamda torch CUDA'ni ko'ra oladimi — training GPU'da ketishini bildiradi.
+    Masofaviy GPU server yoqilgan bo'lsa — o'sha serverning GPU holatini qaytaradi."""
+    if remote_train.ENABLED:
+        out: dict = {"available": False, "gpus": [], "remote": True,
+                     "remote_url": remote_train.REMOTE_URL}
+        try:
+            h = remote_train.health()
+            out["torch_cuda"] = bool(h.get("cuda"))
+            out["torch_version"] = h.get("torch")
+            if h.get("cuda") and h.get("gpu"):
+                out["available"] = True
+                out["gpus"].append({"index": 0, "name": h["gpu"] + " (masofaviy)"})
+        except Exception as e:  # noqa: BLE001
+            out["error"] = f"Masofaviy GPU serverga ulanib bo'lmadi: {e}"
+            out["torch_cuda"] = False
+        return out
     out: dict = {"available": False, "gpus": []}
     try:
         r = subprocess.run(
@@ -4843,6 +5032,22 @@ def research_review_decide(
             raise HTTPException(status_code=404, detail="review item not found")
         c.commit()
     return {"id": review_id, "status": body.status, "n_final": len(final), "decided_at": now}
+
+
+@app.get("/", include_in_schema=False)
+def landing_page():
+    """Bosh sahifa — loyiha haqida, imkoniyatlar va radiomika. Chap burchakda Kirish.
+    Ilovaning o'zi /app da (login modal o'sha yerda avtomatik ochiladi)."""
+    f = STATIC_DIR / "landing.html"
+    if not f.exists():
+        return FileResponse(str(STATIC_DIR / "index.html"), media_type="text/html")
+    return FileResponse(str(f), media_type="text/html")
+
+
+@app.get("/app", include_in_schema=False)
+def app_page():
+    """Asosiy ilova (DICOM viewer + login modal)."""
+    return FileResponse(str(STATIC_DIR / "index.html"), media_type="text/html")
 
 
 app.mount("/", StaticFiles(directory=str(STATIC_DIR), html=True), name="static")

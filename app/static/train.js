@@ -282,6 +282,11 @@ $('datasetSel').addEventListener('change', () => {
 async function startTrain() {
   const data_yaml = $('dataYamlPath').value || $('datasetSel').value;
   if (!data_yaml) { alert('Avval dataset tanlang'); return; }
+  if (window._remoteGpuOnline === false) {
+    alert("GPU server (10.10.0.72) hozir OFFLINE — training boshlab bo'lmaydi.\n"
+      + "Iltimos GPU server yoqilganini tekshiring.");
+    return;
+  }
   const body = {
     data_yaml,
     base_model: $('baseModelSel').value,
@@ -469,6 +474,18 @@ async function loadGpu() {
   if (!el) return;
   try {
     const j = await apiJson('/api/system/gpu');
+    // Masofaviy GPU server (10.10.0.72) — online/offline holati
+    if (j.remote) {
+      if (j.available && j.gpus.length) {
+        el.innerHTML = `🖥 GPU server: ${j.gpus[0].name.replace('NVIDIA ', '')} `
+          + `<span class='ts-ok'>online ✓</span>`;
+        window._remoteGpuOnline = true;
+      } else {
+        el.innerHTML = "🖥 GPU server: <span class='ts-bad'>OFFLINE ⚠ — training ishlamaydi</span>";
+        window._remoteGpuOnline = false;
+      }
+      return;
+    }
     if (!j.available || !j.gpus.length) {
       el.innerHTML = "GPU: <span class='ts-warn'>topilmadi</span>"
         + (j.torch_cuda === false ? " <span class='ts-bad'>⚠ CPU-torch</span>" : '');

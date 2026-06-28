@@ -11,6 +11,11 @@
   .ts-header h1 { font-size: 18px; margin: 0; }
   .ts-back { background: var(--panel-2, #2a2f3e); color: var(--text); border: 1px solid var(--border); padding: 6px 12px; border-radius: 4px; cursor: pointer; text-decoration: none; font-size: 13px }
   .ts-back:hover { border-color: var(--accent, #4a90e2); }
+  .ts-close { margin-left:6px; width:32px; height:32px; display:inline-flex; align-items:center;
+    justify-content:center; background:var(--panel-2,#2a2f3e); color:var(--muted,#8a96a4);
+    border:1px solid var(--border,#333); border-radius:6px; cursor:pointer; text-decoration:none;
+    font-size:16px; font-weight:700; line-height:1 }
+  .ts-close:hover { border-color:#ef4444; color:#ef4444 }
   .ts-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; padding: 16px; max-width: 1400px; margin: 0 auto; }
   @media (max-width: 980px) { .ts-grid { grid-template-columns: 1fr; } }
   .ts-section { background: var(--panel); border: 1px solid var(--border); border-radius: 6px; padding: 14px; }
@@ -53,12 +58,13 @@
 <body>
 
 <div class="ts-header">
-  <a class="ts-back" href="./">← Asosiy</a>
+  <a class="ts-back" href="/app">← Asosiy sahifa</a>
   <h1>🎓 Model Studio</h1>
   <span class="ts-status" id="userInfo"></span>
   <span style="flex:1"></span>
   <span class="ts-gpu" id="gpuInfo" title="GPU holati (nvidia-smi)">GPU: —</span>
   <button class="ts-btn" id="refreshAllBtn">↻ Yangilash</button>
+  <a class="ts-close" href="/app" title="Yopish (asosiy sahifaga qaytish)">✕</a>
 </div>
 
 <div class="ts-grid">

@@ -1,0 +1,219 @@
+<!doctype html>
+<html lang="uz">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>MAMOGRAF — AI yordamida mammografiya tahlili</title>
+<style>
+  :root{
+    --bg:#0e1116; --panel:#161b22; --panel-2:#1f2630; --border:#2a3240;
+    --text:#e6edf3; --muted:#8a96a4; --accent:#2f81f7; --accent-2:#1f6feb;
+    --pink:#ec4899; --green:#22c55e;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{margin:0;font:16px/1.65 system-ui,Segoe UI,Roboto,Arial,sans-serif;
+       background:var(--bg);color:var(--text)}
+  a{color:var(--accent);text-decoration:none}
+
+  /* ---- Yuqori panel: chap burchakda Kirish ---- */
+  header{position:sticky;top:0;z-index:20;display:flex;align-items:center;gap:16px;
+         padding:12px 22px;background:rgba(14,17,22,.85);backdrop-filter:blur(10px);
+         border-bottom:1px solid var(--border)}
+  .brand{display:flex;align-items:center;gap:10px;font-weight:800;font-size:19px;letter-spacing:.5px}
+  .brand .dot{width:11px;height:11px;border-radius:50%;
+              background:linear-gradient(135deg,var(--pink),var(--accent));box-shadow:0 0 12px var(--pink)}
+  .login-btn{order:-1;display:inline-flex;align-items:center;gap:8px;
+             background:linear-gradient(135deg,var(--accent),var(--accent-2));
+             color:#fff;font-weight:700;font-size:15px;padding:9px 20px;border-radius:8px;
+             border:0;cursor:pointer;box-shadow:0 4px 14px rgba(47,129,247,.35);transition:.15s}
+  .login-btn:hover{transform:translateY(-1px);box-shadow:0 6px 20px rgba(47,129,247,.5)}
+  .nav{margin-left:auto;display:flex;gap:22px;font-size:14px;color:var(--muted)}
+  .nav a{color:var(--muted)} .nav a:hover{color:var(--text)}
+  @media(max-width:720px){.nav{display:none}}
+
+  /* ---- Hero ---- */
+  .hero{position:relative;padding:80px 22px 64px;text-align:center;overflow:hidden}
+  .hero::before{content:"";position:absolute;inset:0;z-index:0;
+    background:radial-gradient(60% 80% at 50% -10%,rgba(47,129,247,.18),transparent 70%),
+               radial-gradient(40% 60% at 85% 10%,rgba(236,72,153,.12),transparent 70%)}
+  .hero>*{position:relative;z-index:1}
+  .hero .kicker{display:inline-block;font-size:13px;color:var(--accent);font-weight:700;
+    letter-spacing:1.5px;text-transform:uppercase;margin-bottom:14px;
+    border:1px solid var(--border);padding:5px 14px;border-radius:20px;background:var(--panel)}
+  .hero h1{font-size:clamp(30px,5vw,52px);margin:0 0 18px;line-height:1.15;font-weight:800}
+  .hero h1 .hl{background:linear-gradient(120deg,var(--accent),var(--pink));
+    -webkit-background-clip:text;background-clip:text;color:transparent}
+  .hero p.sub{max-width:760px;margin:0 auto 30px;font-size:18px;color:var(--muted)}
+  .cta{display:inline-flex;align-items:center;gap:10px;
+    background:linear-gradient(135deg,var(--accent),var(--accent-2));color:#fff;
+    font-weight:700;font-size:17px;padding:14px 32px;border-radius:10px;border:0;cursor:pointer;
+    box-shadow:0 6px 22px rgba(47,129,247,.4);transition:.15s}
+  .cta:hover{transform:translateY(-2px);box-shadow:0 10px 30px rgba(47,129,247,.55)}
+  .hero .note{margin-top:14px;font-size:13px;color:var(--muted)}
+
+  /* ---- Umumiy bo'limlar ---- */
+  section{max-width:1080px;margin:0 auto;padding:56px 22px}
+  .sec-head{text-align:center;margin-bottom:38px}
+  .sec-head h2{font-size:clamp(24px,3.5vw,34px);margin:0 0 12px;font-weight:800}
+  .sec-head p{color:var(--muted);max-width:680px;margin:0 auto;font-size:16px}
+  .pill{display:inline-block;font-size:12px;font-weight:700;letter-spacing:1px;
+    text-transform:uppercase;color:var(--pink);margin-bottom:10px}
+
+  /* ---- Loyiha haqida ---- */
+  .about{display:grid;grid-template-columns:1fr 1fr;gap:28px;align-items:center}
+  @media(max-width:780px){.about{grid-template-columns:1fr}}
+  .about .card-lg{background:linear-gradient(160deg,var(--panel),var(--panel-2));
+    border:1px solid var(--border);border-radius:16px;padding:30px}
+  .about ul{margin:14px 0 0;padding:0;list-style:none}
+  .about li{padding:8px 0 8px 30px;position:relative;color:var(--text)}
+  .about li::before{content:"✓";position:absolute;left:0;color:var(--green);font-weight:800}
+
+  /* ---- Imkoniyatlar grid ---- */
+  .grid{display:grid;grid-template-columns:repeat(3,1fr);gap:18px}
+  @media(max-width:860px){.grid{grid-template-columns:repeat(2,1fr)}}
+  @media(max-width:560px){.grid{grid-template-columns:1fr}}
+  .feat{background:var(--panel);border:1px solid var(--border);border-radius:14px;
+    padding:24px;transition:.15s}
+  .feat:hover{border-color:var(--accent);transform:translateY(-3px);
+    box-shadow:0 10px 28px rgba(0,0,0,.35)}
+  .feat .ico{font-size:28px;margin-bottom:12px}
+  .feat h3{margin:0 0 8px;font-size:17px}
+  .feat p{margin:0;color:var(--muted);font-size:14.5px}
+
+  /* ---- Radiomika ---- */
+  .radio{background:linear-gradient(160deg,rgba(236,72,153,.08),rgba(47,129,247,.06));
+    border:1px solid var(--border);border-radius:18px;padding:38px}
+  .radio .grid2{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-top:26px}
+  @media(max-width:780px){.radio .grid2{grid-template-columns:repeat(2,1fr)}}
+  .stat{background:var(--bg);border:1px solid var(--border);border-radius:12px;padding:18px;text-align:center}
+  .stat .ico{font-size:24px}
+  .stat h4{margin:8px 0 4px;font-size:15px}
+  .stat p{margin:0;color:var(--muted);font-size:13px}
+
+  footer{border-top:1px solid var(--border);margin-top:30px;padding:30px 22px;
+    text-align:center;color:var(--muted);font-size:13.5px}
+  .footer-cta{margin:0 auto 26px;max-width:760px;text-align:center;
+    background:linear-gradient(135deg,rgba(47,129,247,.12),rgba(236,72,153,.10));
+    border:1px solid var(--border);border-radius:16px;padding:36px}
+  .footer-cta h2{margin:0 0 10px;font-size:26px}
+  .footer-cta p{color:var(--muted);margin:0 0 22px}
+</style>
+</head>
+<body>
+
+<header>
+  <!-- Chap burchakdagi Kirish tugmasi -->
+  <a class="login-btn" href="/app">🔐 Kirish</a>
+  <div class="brand"><span class="dot"></span> MAMOGRAF</div>
+  <nav class="nav">
+    <a href="#about">Loyiha haqida</a>
+    <a href="#features">Imkoniyatlar</a>
+    <a href="#radiomics">Radiomika</a>
+  </nav>
+</header>
+
+<!-- HERO -->
+<div class="hero">
+  <span class="kicker">AI yordamida raqamli mammografiya</span>
+  <h1>Ko'krak bezi saratonini <span class="hl">erta aniqlash</span> uchun<br>sun'iy intellekt platformasi</h1>
+  <p class="sub">MAMOGRAF — mammografiya (DICOM) tasvirlarini sun'iy intellekt yordamida
+     tahlil qiluvchi, radiologlarga shubhali o'choqlarni aniqlash, belgilash, hisobot
+     tayyorlash va radiomik tahlil o'tkazishda yordam beruvchi tibbiy platforma.</p>
+  <a class="cta" href="/app">Tizimga kirish →</a>
+  <div class="note">Faqat ro'yxatdan o'tgan foydalanuvchilar uchun · Chap yuqori burchakdagi “Kirish” tugmasi</div>
+</div>
+
+<!-- LOYIHA HAQIDA -->
+<section id="about">
+  <div class="about">
+    <div>
+      <span class="pill">Loyiha haqida</span>
+      <h2 style="margin:0 0 14px;font-size:30px">Nima uchun mo'ljallangan?</h2>
+      <p style="color:var(--muted)">Ko'krak bezi saratoni — ayollar orasida eng ko'p uchraydigan
+        onkologik kasalliklardan biri. Uni <b>erta bosqichda</b> aniqlash davolanish
+        samaradorligini keskin oshiradi. MAMOGRAF radiologlar mehnatini yengillashtirish va
+        diagnostika sifatini oshirish uchun yaratilgan:</p>
+      <ul>
+        <li>Mammografiya tasvirlarida massa va mikrokalsifikatsiyalarni avtomatik aniqlash</li>
+        <li>Shifokorga “ikkinchi fikr” sifatida AI yordami berish</li>
+        <li>Belgilashlarni tizimli saqlash va tadqiqot uchun dataset tayyorlash</li>
+        <li>Hisobot va BI-RADS xulosalarini tezroq shakllantirish</li>
+      </ul>
+    </div>
+    <div class="card-lg">
+      <div style="font-size:48px">🩺</div>
+      <h3 style="margin:14px 0 6px;font-size:20px">Radiolog + Sun'iy intellekt</h3>
+      <p style="color:var(--muted);margin:0">Platforma shifokorni almashtirmaydi — uning
+        e'tiborini shubhali joylarga qaratadi, vaqtini tejaydi va inson xatosini kamaytiradi.
+        Yakuniy qaror har doim mutaxassis zimmasida qoladi.</p>
+    </div>
+  </div>
+</section>
+
+<!-- IMKONIYATLAR -->
+<section id="features">
+  <div class="sec-head">
+    <span class="pill">Imkoniyatlar</span>
+    <h2>Dastur imkoniyatlari</h2>
+    <p>DICOM ko'rishdan tortib AI model o'qitishgacha — to'liq diagnostika ish jarayoni bitta platformada.</p>
+  </div>
+  <div class="grid">
+    <div class="feat"><div class="ico">🖼️</div><h3>DICOM ko'ruvchi</h3>
+      <p>Mammografiya tasvirlarini professional ko'rish: oyna/daraja (window/level), masshtab, ko'p proyeksiya (CC/MLO).</p></div>
+    <div class="feat"><div class="ico">🤖</div><h3>AI aniqlash</h3>
+      <p>YOLO modellari massa va kalsifikatsiyalarni avtomatik topadi, ishonch darajasi bilan ko'rsatadi.</p></div>
+    <div class="feat"><div class="ico">✏️</div><h3>Annotatsiya</h3>
+      <p>Topilmalarni qo'lda belgilash, tahrirlash, tasdiqlash va izohlash — barchasi saqlanadi.</p></div>
+    <div class="feat"><div class="ico">📝</div><h3>AI hisobot</h3>
+      <p>Topilmalardan avtomatik mammografiya hisoboti qoralamasi (lokal LLM yoki shablon) va DICOM SR eksporti.</p></div>
+    <div class="feat"><div class="ico">🧪</div><h3>Model Studio</h3>
+      <p>O'z ma'lumotlaringizdan yangi AI modelni o'qitish — GPU serverda, jonli grafik va monitoring bilan.</p></div>
+    <div class="feat"><div class="ico">🧬</div><h3>Radiomik tahlil</h3>
+      <p>O'choqdan miqdoriy belgilar (tekstura, shakl, intensivlik) ajratib, xavf darajasini baholash.</p></div>
+    <div class="feat"><div class="ico">🎓</div><h3>Dataset tayyorlash</h3>
+      <p>Belgilangan tasvirlardan YOLO formatida o'qitish to'plamini bir tugma bilan yaratish.</p></div>
+    <div class="feat"><div class="ico">🏥</div><h3>PACS integratsiya</h3>
+      <p>Kasalxona PACS serverlaridan tasvirlarni olish va ish jarayoniga ulash.</p></div>
+    <div class="feat"><div class="ico">🔐</div><h3>Xavfsizlik</h3>
+      <p>Rol asosida kirish (admin/reviewer/annotator), 2FA, audit jurnali va bemor ma'lumotlarini deidentifikatsiya.</p></div>
+  </div>
+</section>
+
+<!-- RADIOMIKA -->
+<section id="radiomics">
+  <div class="radio">
+    <div class="sec-head" style="margin-bottom:6px">
+      <span class="pill">Radiomik tahlil</span>
+      <h2>Radiomika nega muhim?</h2>
+      <p>Radiomika — tibbiy tasvirlardan inson ko'zi ilg'amaydigan <b>minglab miqdoriy
+        belgilarni</b> matematik usulda ajratib olish. Bu “tasvirni raqamlarga aylantirish”
+        orqali diagnostikani obyektiv va aniqroq qiladi.</p>
+    </div>
+    <div class="grid2">
+      <div class="stat"><div class="ico">🔢</div><h4>Obyektiv o'lchov</h4><p>Subyektiv bahodan farqli — takrorlanadigan, raqamli ko'rsatkichlar.</p></div>
+      <div class="stat"><div class="ico">🧩</div><h4>Yashirin belgilar</h4><p>Tekstura va geometriya — ko'z ilg'amagan naqshlarni ochib beradi.</p></div>
+      <div class="stat"><div class="ico">⚖️</div><h4>Xavf bashorati</h4><p>Xavfsiz (benign) va xavfli (malignant) o'choqlarni farqlashga yordam.</p></div>
+      <div class="stat"><div class="ico">📊</div><h4>Qaror qo'llab-quvvatlash</h4><p>Shifokorga dalillarga asoslangan, miqdoriy asos beradi.</p></div>
+    </div>
+    <p style="color:var(--muted);margin:26px 0 0;text-align:center;max-width:820px;margin-left:auto;margin-right:auto">
+      MAMOGRAF aniqlangan har bir o'choq uchun radiomik belgilarni hisoblab, ularni AI
+      bashoratlari bilan birlashtiradi — bu erta va ishonchli tashxisga olib keladi.
+    </p>
+  </div>
+</section>
+
+<!-- Pastki CTA -->
+<div class="footer-cta">
+  <h2>Ishni boshlashga tayyormisiz?</h2>
+  <p>Tizimga kiring va mammografiya tahlilini sun'iy intellekt bilan boshlang.</p>
+  <a class="cta" href="/app">🔐 Tizimga kirish</a>
+</div>
+
+<footer>
+  © 2026 MAMOGRAF · AI yordamida mammografiya tahlil tizimi ·
+  <a href="/app">Kirish</a>
+</footer>
+
+</body>
+</html>

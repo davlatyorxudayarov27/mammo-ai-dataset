@@ -89,7 +89,10 @@
 <!-- YOLO training dataset tayyorlash modali -->
 <div class="modal" id="trainPrepModal" hidden>
   <div class="modal-card" style="max-width:600px">
-    <h2>🎓 Training dataset tayyorlash</h2>
+    <div class="modal-head">
+      <h2>🎓 Training dataset tayyorlash</h2>
+      <button class="modal-close" id="trainPrepXBtn" type="button" title="Yopish">✕</button>
+    </div>
     <p style="color:var(--muted);font-size:13px;margin-top:0">
       Annotation'larni <strong>Ultralytics YOLO</strong> formatiga aylantirib,
       <code>images/{train,val}</code> + <code>labels/{train,val}</code> + <code>data.yaml</code>
