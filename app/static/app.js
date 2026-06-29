@@ -5469,12 +5469,22 @@ async function submitTrainPrep(ev) {
     const j = await r.json();
     localStorage.setItem('mamograf_last_train_dest', dest);
     _lastDataYaml = j.data_yaml;
+    _lastDatasetName = (j.remote_dataset && !j.remote_dataset.error) ? j.dataset_name : null;
     const tb = $('trRunBtn'); if (tb) tb.disabled = false;
     const trs = $('trRunStatus'); if (trs) trs.textContent = `Tayyor: ${j.data_yaml}`;
+    // GPU serverga oldindan yuklash holati
+    let remoteHtml = '';
+    if (j.remote_dataset && !j.remote_dataset.error) {
+      const mb = (j.remote_dataset.bytes / 1048576).toFixed(1);
+      remoteHtml = `<div style="margin-top:6px;color:#22c55e">📡 GPU serverga yuklandi (10.10.0.72): <code>${j.dataset_name}</code> · ${mb} MB — <strong>▶ Train darhol boshlanadi</strong></div>`;
+    } else if (j.remote_dataset && j.remote_dataset.error) {
+      remoteHtml = `<div style="margin-top:6px;color:#f59e0b">⚠ GPU serverga oldindan yuklab bo'lmadi (${j.remote_dataset.error}) — ▶ Train paytida yuklanadi</div>`;
+    }
     const html = `
       <div style="background:var(--panel-2);border-left:3px solid #22c55e;padding:8px 12px;border-radius:3px">
         <strong>✓ Training dataset tayyor</strong><br>
         Manzil: <code>${j.destination}</code><br>
+        ${remoteHtml}
         Klasslar (${j.classes.length}): <strong>${j.classes.join(', ')}</strong><br>
         <table style="margin-top:6px;font-size:12px;border-collapse:collapse">
           <tr><th style="text-align:left;padding:2px 8px">Split</th><th style="padding:2px 8px">Tasvirlar</th><th style="padding:2px 8px">Annotatsiyalar (label satrlari)</th></tr>
@@ -5515,6 +5525,7 @@ yolo task=detect mode=train model=yolo11n.pt \\
 
 // Server'da YOLO o'qitish — modal ichidagi tugma
 let _lastDataYaml = null;
+let _lastDatasetName = null;   // GPU'da oldindan yuklangan dataset nomi (tez-start)
 let _trainPollTimer = null;
 async function startServerTrain() {
   if (!_lastDataYaml) { alert('Avval dataset yarating'); return; }
@@ -5531,6 +5542,7 @@ async function startServerTrain() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         data_yaml: _lastDataYaml,
+        dataset_name: _lastDatasetName,   // GPU'da bo'lsa — qayta yuklanmaydi, darhol start
         base_model: $('trBaseModel').value,
         epochs: parseInt($('trEpochs').value, 10) || 50,
         imgsz: parseInt($('tpSize').value, 10) || 1024,

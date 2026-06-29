@@ -1038,6 +1038,7 @@ class TrainingRunBody(BaseModel):
     cache: str = "False"              # "False" | "ram" | "disk"
     device: str = ""                  # "" auto, "cpu", "0", "0,1"
     project_name: Optional[str] = None  # foydalanuvchi bergan nom
+    dataset_name: Optional[str] = None  # GPU'da oldindan yuklangan dataset nomi (remote tez-start)
 
 
 @app.post("/api/training/run")
@@ -1777,6 +1778,14 @@ def training_prepare(
     if not dest_str:
         raise HTTPException(400, "destination kerak")
     dest = Path(dest_str)
+    # Masofaviy GPU rejimida "destination" — GPU serverdagi dataset NOMI.
+    # Lokal'da uni vaqtinchalik staging papkaga yig'amiz (training_data/<nom>),
+    # so'ng GPU'ga yuklaymiz. Nisbiy yo'l bo'lsa ham staging'ga ildizlaymiz.
+    if remote_train.ENABLED and not dest.is_absolute():
+        staging_root = BASE_DIR / "training_data"
+        staging_root.mkdir(parents=True, exist_ok=True)
+        safe_name = re.sub(r"[^A-Za-z0-9_.-]+", "_", dest.name).strip("._-") or "dataset"
+        dest = staging_root / safe_name
     forbidden_starts = [r"C:\Windows", r"C:\Program Files", "/etc", "/usr", "/bin", "/sbin", "/sys", "/proc"]
     if any(str(dest).lower().startswith(x.lower()) for x in forbidden_starts):
         raise HTTPException(400, f"Bu papkaga yozish taqiqlangan: {dest}")
@@ -1969,6 +1978,17 @@ def training_prepare(
                 if p.is_file():
                     zf.write(p, p.relative_to(dest.parent))
 
+    # --- Masofaviy GPU serverga oldindan yuklash --------------------------- #
+    # Shunda ▶ Train bosilganda dataset qayta yuborilmaydi — darhol boshlanadi.
+    remote_dataset = None
+    dataset_name = None
+    if remote_train.ENABLED:
+        dataset_name = re.sub(r"[^A-Za-z0-9_.-]+", "_", dest.name).strip("._-") or "dataset"
+        try:
+            remote_dataset = remote_train.push_dataset(dataset_name, dest)
+        except Exception as e:  # noqa: BLE001
+            remote_dataset = {"error": str(e)}
+
     return {
         "destination": str(dest),
         "data_yaml": str(yaml_path),
@@ -1978,6 +1998,8 @@ def training_prepare(
         "items_total": len(items),
         "val_groups": n_val_groups,
         "total_groups": len(groups),
+        "dataset_name": dataset_name,        # GPU serverdagi dataset nomi (remote rejim)
+        "remote_dataset": remote_dataset,    # GPU yuklash natijasi yoki {error:...}
         **counts,
     }
 

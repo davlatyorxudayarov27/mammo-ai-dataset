@@ -227,10 +227,11 @@ def titul(doc):
         r.font.size = Pt(sz)
         return p
     c("OʻZBEKISTON RESPUBLIKASI OLIY TAʼLIM, FAN VA INNOVATSIYALAR VAZIRLIGI", 13, True, 2)
-    c("[OLIY TAʼLIM YOKI ILMIY-TADQIQOT MUASSASASI NOMI]", 13, True, 24)
+    c("RAQAMLI TEXNOLOGIYALAR VA SUNʼIY INTELLEKTNI RIVOJLANTIRISH "
+      "ILMIY-TADQIQOT INSTITUTI", 13, True, 24)
     c("Qoʻlyozma huquqida", 12)
     c("UDK 004.93", 12, sp=28)
-    c("[MUALLIF FAMILIYASI ISMI OTASINING ISMI]", 14, True, 22)
+    c("TURAQULOV SHOXRUX XUDAYAROVICH", 14, True, 22)
     c("MAMMOGRAFIYA TASVIRLARI ASOSIDA KOʻKRAK OʻSMA SOHALARINI ANIQLASH, "
       "BI-RADS BOʻYICHA TASNIFLASH VA AVTOMATIK XULOSA SHAKLLANTIRISHNING "
       "SUNʼIY INTELLEKTGA ASOSLANGAN ALGORITM VA DASTURIY MAJMUASI", 14, True, 22)
@@ -240,14 +241,8 @@ def titul(doc):
     c("DISSERTATSIYA", 16, True, 34)
     p = doc.add_paragraph()
     p.alignment = WD_ALIGN_PARAGRAPH.RIGHT
-    p.add_run("Ilmiy rahbar: [F.I.Sh., ilmiy darajasi, unvoni]").font.size = Pt(12)
+    p.add_run("Ilmiy rahbar: professor Xamdamov Rustam").font.size = Pt(12)
     c(f"Toshkent — {date.today().year}", 13, True, 0)
-    n = doc.add_paragraph()
-    n.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    r = n.add_run("[Eslatma: [...] joylarni — muassasa, muallif, ilmiy rahbar — to'ldiring.]")
-    r.italic = True
-    r.font.size = Pt(10)
-    r.font.color.rgb = MUTED
     pb(doc)
 
 
@@ -266,6 +261,8 @@ def mundarija(doc):
         ("1.4-§. Obyektlarni aniqlashning chuqur oʻrganishga asoslangan usullari", False),
         ("1.5-§. Oʻzaro eʼtibor mexanizmlari, ordinal regressiya va radiomika", False),
         ("1.6-§. Maʼlumotlar toʻplamlari, baholash metrikalari va tadqiqot masalasining qoʻyilishi", False),
+        ("1.7-§. Mammografiyada chuqur oʻrganishning tizimli sharhi", False),
+        ("1.8-§. Koʻpkoʻrinishli va ikki tomonlama yondashuvlarning qiyosiy tahlili", False),
         ("I bob boʻyicha xulosalar", False),
         ("II BOB. KOʻKRAK OʻSMALARINI ANIQLASH VA TASNIFLASH ALGORITMLARI", True),
         ("2.1-§. Belgilashlar va masalaning matematik qoʻyilishi", False),
@@ -274,18 +271,21 @@ def mundarija(doc):
         ("2.4-§. Ordinal BI-RADS regressiyasi va kompozit yoʻqotish funksiyasi", False),
         ("2.5-§. Radiomik belgilarni chuqur oʻrganish bilan birlashtirish", False),
         ("2.6-§. Multimodal (matn-asosli) detektsiya: TILLNet va matn tasniflagichi", False),
+        ("2.7-§. Oʻqitish protseduri, augmentatsiya va giperparametrlar", False),
         ("II bob boʻyicha xulosalar", False),
         ("III BOB. ALGORITMLARNI AMALGA OSHIRUVCHI DASTURIY MAJMUA", True),
         ("3.1-§. Tizim arxitekturasi, maxfiylik va xavfsizlik", False),
         ("3.2-§. Annotatsiya, faol oʻrganish va AI yordami", False),
         ("3.3-§. Model oʻqitish konveyeri (Model Studio) va resurslar monitoringi", False),
         ("3.4-§. Avtomatik xulosa shakllantirish, DICOM SR va PACS integratsiyasi", False),
+        ("3.5-§. Maʼlumotlar modeli, dasturiy interfeyslar va ish oqimi", False),
         ("III bob boʻyicha xulosalar", False),
         ("IV BOB. TAJRIBAVIY TADQIQOTLAR VA AMALIYOTDA QOʻLLASH", True),
         ("4.1-§. Maʼlumotlar toʻplami, eksperiment sxemasi va baholash metodologiyasi", False),
         ("4.2-§. Tajriba natijalari, ablatsion tahlil va muhokama", False),
         ("4.3-§. Hisoblash murakkabligi va inferens samaradorligi", False),
         ("4.4-§. Dasturiy majmuani amaliyotda qoʻllash va joriy etish", False),
+        ("4.5-§. Statistik tahlil, xatolar tahlili va cheklovlar", False),
         ("IV bob boʻyicha xulosalar", False),
         ("XULOSA", True),
         ("FOYDALANILGAN ADABIYOTLAR ROʻYXATI", True),
@@ -466,7 +466,10 @@ def kirish(doc):
     ], numbered=True)
     lead(doc, "Tadqiqotning obyekti —",
          "rentgen nurlari asosida turli proyeksiyalarda (CC, MLO) olingan raqamli "
-         "mammografiya tasvirlari (DICOM formati) va ularga tegishli klinik hisobotlar.")
+         "mammografiya tasvirlari (DICOM formati) va ularga tegishli klinik hisobotlar, "
+         "jumladan Respublika ixtisoslashtirilgan Onkologiya va Radiologiya ilmiy-amaliy "
+         "tibbiy markazidan olingan (anonimlashtirilgan) klinik mammografiya ma'lumotlari "
+         "hamda ochiq VinDr-Mammo to'plami.")
     lead(doc, "Tadqiqotning predmeti —",
          "mammografiya tasvirlarida o'sma sohalarini aniqlash, BI-RADS bo'yicha tasniflash "
          "va avtomatik xulosa shakllantirishning usul, algoritm va dasturiy vositalari.")
@@ -505,14 +508,23 @@ def kirish(doc):
          "bo'limlarida tashxis jarayonini tezlashtirish, kuzatuvchilararo o'zgaruvchanlikni "
          "kamaytirish va erta aniqlashni qo'llab-quvvatlash uchun qo'llash imkoniyatidir.")
     lead(doc, "Tadqiqot natijalarining joriy qilinishi.",
-         "[Dasturiy majmua ... klinikasi/poliklinikasi radiologiya bo'limida joriy "
-         "qilingan — joriy etilish to'g'risidagi ma'lumotni to'ldiring.]")
+         "Tadqiqotda ishlab chiqilgan algoritmlar va MAMOGRAF dasturiy majmuasi Respublika "
+         "ixtisoslashtirilgan Onkologiya va Radiologiya ilmiy-amaliy tibbiy markazidan "
+         "olingan klinik mammografiya ma'lumotlari asosida sinovdan o'tkazilgan. [Joriy "
+         "etilish dalolatnomasining raqami va sanasini to'ldiring.]")
     lead(doc, "Tadqiqot natijalarining aprobatsiyasi.",
-         "[Tadqiqot natijalari ... ta xalqaro va respublika ilmiy-amaliy anjumanlarida "
-         "muhokama qilingan — anjumanlar ro'yxatini to'ldiring.]")
+         "Tadqiqot natijalari xalqaro ilmiy-amaliy anjumanda muhokama qilingan: «Kibernetika "
+         "— zamonaviy sun'iy intellektning poydevori» xalqaro ilmiy-amaliy anjumani "
+         "(Toshkent, 2026-yil 15–16-aprel), «Image classification algorithms based on "
+         "neural network technologies for medical image analysis» ma'ruzasi.")
     lead(doc, "Tadqiqot natijalarining e'lon qilinganligi.",
-         "[Dissertatsiya mavzusi bo'yicha ... ta ilmiy maqola, jumladan BCA-YOLO va "
-         "Radiomic-Enhanced Faster R-CNN ishlari e'lon qilingan — ro'yxatni to'ldiring.]")
+         "Dissertatsiya mavzusi bo'yicha bir nechta ilmiy ish e'lon qilingan, jumladan:")
+    bullets(doc, [
+        "Turaqulov Sh.X. BCA-YOLO: ikki tomonlama o'zaro e'tibor, ko'rinishlararo muvofiqlik va ordinal BI-RADS regressiyasi asosida mammografik shikastlanishlarni aniqlash // Raqamli texnologiyalarning nazariy va amaliy masalalari xalqaro jurnali. — 2026. — № 9(2). — B. 58–66. — ISSN 2181-3086.",
+        "Khamdamov R., Turaqulov Sh.X. TILLNet-Det: A Text-Informed Lesion Localization Network for Multilingual Mammography Detection in Low-Resource Settings // International Journal of Informatics and Data Science Research. — 2026.",
+        "Khamdamov R., Turaqulov Sh.X. Annotatsiyasi kam sharoitlarda ko'p tilli mammografik o'choqlarni aniqlash uchun yopiq halqali tizim: radiolog-inson hamkorligi bilan matnga yo'naltirilgan zaif nazoratli o'qitish // Raqamli Transformatsiya va Sun'iy Intellekt. — 2026. — DOI: 10.5281/zenodo.20816862.",
+        "Turaqulov Sh., Khamdamov R. Image classification algorithms based on neural network technologies for medical image analysis // «Kibernetika — zamonaviy sun'iy intellektning poydevori» xalqaro ilmiy-amaliy anjumani. — Toshkent, 2026.",
+    ], numbered=True)
     lead(doc, "Dissertatsiyaning tuzilishi va hajmi.",
          "Dissertatsiya kirish, to'rtta bob, xulosa, foydalanilgan adabiyotlar ro'yxati va "
          "ilovalardan iborat. Ishda jadvallar, formulalar va rasmlar keltirilgan.")
@@ -725,6 +737,29 @@ def bob1(doc):
               "tadqiqotlarni bog'lash, MRT modalliklarini birlashtirish kabi vazifalarda "
               "qo'llanilgan. Mammografiyada esa ikki tomonlama asimmetriyani modellashda "
               "uning salohiyati to'liq ochilmagan.")
+    para(doc, "E'tibor mexanizmlari kompyuter ko'rishida bir necha shaklda namoyon bo'ladi. "
+              "**Kanalli e'tibor** — Squeeze-and-Excitation (SE) tarmoqlari xususiyat "
+              "kanallarining nisbiy ahamiyatini global kontekst asosida qayta tortadi. "
+              "**Fazoviy va kanalli e'tibor** — CBAM (Convolutional Block Attention Module) "
+              "ketma-ket kanalli va fazoviy e'tiborni birlashtirib, \"qaysi kanal\" va "
+              "\"qaysi soha\" muhimligini aniqlaydi. Bu modullar konvolyutsion tarmoqlarga "
+              "kam hisoblash narxida qo'shilib, aniqlikni oshiradi. Mammografiyada ular "
+              "shikastlanishga oid xususiyatlarni kuchaytirish uchun foydali, biroq ular bir "
+              "tasvir ichidagi e'tiborni qayta taqsimlaydi — ikki ko'rinish yoki ikki ko'krak "
+              "o'rtasidagi munosabatni modellamaydi.")
+    para(doc, "**O'z-o'ziga e'tibor (self-attention)** bir oqim ichidagi pozitsiyalar "
+              "o'rtasidagi bog'liqlikni, **o'zaro e'tibor (cross-attention)** esa ikki "
+              "alohida oqim o'rtasidagi bog'liqlikni modellaydi. Aynan o'zaro e'tibor "
+              "kontralateral (chap↔o'ng) yoki proyeksiyalararo (CC↔MLO) munosabatlarni "
+              "ifodalash uchun tabiiy vositadir — bu ushbu dissertatsiyada taklif etilgan "
+              "BCA blokining nazariy asosini tashkil etadi. Shartlashtirishning yana bir "
+              "shakli — **FiLM (Feature-wise Linear Modulation)** — yordamchi signal (masalan "
+              "matn) asosida xususiyatlarni kanal bo'yicha masshtablash va siljitish orqali "
+              "modulyatsiya qiladi; bu mexanizm matn-asosli detektsiyada (TILLNet) "
+              "qo'llaniladi. Vizual transformerlar (ViT) va DETR kabi detektorlar e'tiborni "
+              "arxitekturaning markaziy elementiga aylantirdi, biroq ular katta o'qitish "
+              "to'plami va hisoblash resursini talab qiladi — bu tibbiy sohada, ma'lumot "
+              "cheklangan sharoitda, muhim cheklov.")
     para(doc, "**Ordinal regressiya** — sinflar tabiiy tartibga ega bo'lgan masalalar uchun "
               "mo'ljallangan. BI-RADS shkalasi aynan shunday: kategoriyalar orasidagi "
               "masofa teng emas. Ordinal masalalarni kumulyativ bog'lanish (cumulative "
@@ -897,6 +932,43 @@ def bob1(doc):
               "avtomatik xulosaga va PACS integratsiyasigacha — qamrab oluvchi yaxlit "
               "dasturiy majmua yaratish. Ushbu dissertatsiya aynan shu ikki yo'nalishni "
               "birlashtiradi.")
+
+    h2(doc, "1.8-§. Koʻpkoʻrinishli va ikki tomonlama yondashuvlarning qiyosiy tahlili")
+    para(doc, "Mammografik detektsiya bo'yicha yondashuvlarni radiolog amaliyotidagi to'rt "
+              "asosiy klinik tamoyilni — ko'rinishlarni birgalikda qayta ishlash, ikki "
+              "tomonlama (kontralateral) asimmetriya, ko'rinishlararo (CC↔MLO) muvofiqlik "
+              "va BI-RADS ning ordinal baholanishi — qay darajada qamrab olishiga ko'ra "
+              "tizimli qiyoslash mumkin (1.3-jadval). Bu qiyoslash mavjud ishlarning kuchli "
+              "tomonlari va bo'shliqlarini aniq ko'rsatadi.")
+    table(doc, ["Yondashuv", "Ko'rinishlar", "Ikki tomonlama asimmetriya",
+                "Ko'rinishlararo muvofiqlik", "Ordinal BI-RADS", "Uchidan-uchiga"], [
+        ["Bir ko'rinishli YOLO / Faster R-CNN (Al-Masni, Aly, Ribli)", "Mustaqil", "Yo'q", "Yo'q", "Yo'q (nominal)", "Ha"],
+        ["Ikki ko'rinishli (Petrini, EfficientNet)", "CC+MLO juft", "Yo'q", "Qisman (kech birlashtirish)", "Yo'q", "Ha"],
+        ["Ko'p ko'rinishli (MommiNet, Yang)", "Ko'p ko'rinish", "Qisman", "Qisman", "Yo'q", "Ha"],
+        ["Ko'rinishlararo moslik (Liu)", "CC+MLO", "Yo'q", "Ha (moslik)", "Yo'q", "Ha"],
+        ["BCA-YOLO (ushbu ish)", "To'rt ko'rinish birga", "Ha (BCA, α-darvoza)", "Ha (IVC moduli)", "Ha (monoton ostona)", "Ha"],
+    ], caption="1.3-jadval. Mammografik detektsiya yondashuvlarining klinik induktiv taxminlar bo'yicha qiyosiy tahlili")
+    para(doc, "Jadvaldan ko'rinadiki, mavjud ishlarning aksariyati ko'rinishlarni mustaqil "
+              "yoki kech (qaror darajasida) birlashtiradi va kontralateral asimmetriyani "
+              "model ichida aniq modellamaydi. Ikki ko'rinishli yondashuvlar (Petrini va b.) "
+              "bir ko'krakning CC va MLO proyeksiyalarini birlashtiradi, biroq chap va o'ng "
+              "ko'krak o'rtasidagi qiyoslashni — radiolog tahlilining markaziy elementini — "
+              "qoldiradi. Ko'p ko'rinishli arxitekturalar (MommiNet) ma'lumotni "
+              "birlashtiradi, lekin asimmetriyani o'rganiluvchi, izohlanuvchi mexanizm "
+              "sifatida ifodalamaydi. Liu va hammualliflarining ko'rinishlararo moslik ishi "
+              "CC↔MLO muvofiqligini modellaydi, ammo ikki tomonlama asimmetriya va ordinal "
+              "baholashni qamrab olmaydi.")
+    para(doc, "Bundan tashqari, ko'rib chiqilgan ishlarning deyarli barchasi BI-RADS ni "
+              "**nominal** sinflar sifatida talqin qiladi va shkalaning ordinal tabiatini "
+              "(kategoriyalar tartibli, ular orasidagi xato narxi turlicha) e'tiborsiz "
+              "qoldiradi. Yana bir muhim bo'shliq — aniqlash/tasniflashdan tashqari, "
+              "annotatsiya, model o'qitish, avtomatik xulosa va PACS integratsiyasini "
+              "qamrab oluvchi **yaxlit klinik dasturiy majmua** kamdan-kam taqdim etiladi. "
+              "Aynan shu bo'shliqlar — kontralateral asimmetriya, ko'rinishlararo muvofiqlik "
+              "va ordinal baholashni yagona uchidan-uchiga o'rgatiladigan tarmoqda "
+              "birlashtirish hamda uni to'liq klinik tizimga joylashtirish — ushbu "
+              "dissertatsiya tadqiqotining ilmiy yangiligi va amaliy hissasini belgilaydi.")
+
     concl(doc, "I", [
         "Ko'krak saratonini erta aniqlashda skrining mammografiyasi va to'rt ko'rinishli (CC/MLO) tahlil hal qiluvchi ahamiyatga ega; BI-RADS shkalasi ordinal tabiatga ega.",
         "DICOM standarti va PACS tibbiy tasvirlarni saqlash va almashishni belgilaydi; PHI anonimlashtirish maxfiylik talabidir.",
@@ -1093,10 +1165,13 @@ def bob2(doc):
 
     h2(doc, "2.6-§. Multimodal (matn-asosli) detektsiya: TILLNet va matn tasniflagichi")
     para(doc, "Klinik matn (anamnez, shikoyatlar) tasvir bilan birga mavjud bo'lganda, uni "
-              "detektsiyaga kiritish samaradorlikni oshirishi mumkin. **TILLNet-Det** — "
+              "detektsiyaga kiritish samaradorlikni oshirishi mumkin. Muallifning ushbu "
+              "yo'nalishdagi ishi — **TILLNet-Det** (Khamdamov R., Turaqulov Sh.X., 2026) — "
               "matn bilan boshqariladigan, FiLM (Feature-wise Linear Modulation) modulyatsiyali "
-              "FCOS-uslubidagi detektor. Matn vektoriga asoslangan $\\gamma$ va $\\beta$ "
-              "parametrlari tasvir xususiyatlarini modulyatsiya qiladi:")
+              "FCOS-uslubidagi detektor bo'lib, kam-resursli (low-resource) va ko'p tilli "
+              "sharoitda mammografik o'choqlarni aniqlashga mo'ljallangan. Matn vektoriga "
+              "asoslangan $\\gamma$ va $\\beta$ parametrlari tasvir xususiyatlarini "
+              "modulyatsiya qiladi:")
     eq(doc, "film", number="2.13")
     para(doc, "FiLM modulyatsiyasi (2.13) matn shartiga asoslanib tasvir xususiyatlarini "
               "kanal bo'yicha masshtablaydi ($\\gamma$) va siljitadi ($\\beta$). Bu "
@@ -1254,7 +1329,11 @@ def bob3(doc):
               "yetarli yangi ma'lumot to'planganda modelni qayta o'qitishni tavsiya qiladi. "
               "Bu inson-mashina hamkorligi siklini (3.2-rasm) tashkil etadi: AI taklif "
               "qiladi → radiolog tasdiqlaydi/tuzatadi → yangi ma'lumot to'planadi → model "
-              "qayta o'qitiladi → aniqlik oshadi.")
+              "qayta o'qitiladi → aniqlik oshadi. Ushbu yopiq halqali (closed-loop), "
+              "radiolog-inson hamkorligiga asoslangan matnga yo'naltirilgan zaif nazoratli "
+              "o'qitish yondashuvi muallifning alohida ishida (Khamdamov R., Turaqulov "
+              "Sh.X., 2026) batafsil asoslangan va ayniqsa annotatsiya kam bo'lgan "
+              "sharoitlar uchun samarali.")
     img(doc, "cycle.png", width=4.8, caption="3.2-rasm. Faol o'rganish sikli (AI ↔ radiolog)")
 
     para(doc, "AI inference konveyeri bir nechta rejimni qo'llab-quvvatlaydi. Avtomatik "
@@ -1312,6 +1391,32 @@ def bob3(doc):
               "To'xtatilganda oxirgi nuqta (last.pt) saqlanib, keyin shu nuqtadan davom "
               "ettirish (Resume) mumkin. O'qitilgan eng yaxshi model (best.pt) validatsiya "
               "mAP'i bo'yicha tanlanib, avtomatik tarzda ishlatishga joylashtiriladi.")
+
+    para(doc, "**Masofaviy (taqsimlangan) GPU o'qitish arxitekturasi.** Klinik ish "
+              "stantsiyasi yoki ilova serveri ko'pincha kuchli grafik protsessorga ega "
+              "bo'lmaydi, model o'qitish esa katta hisoblash resursini talab qiladi. Shu "
+              "sababli MAMOGRAF tizimida o'qitishni alohida GPU serverga uzatuvchi "
+              "taqsimlangan arxitektura amalga oshirilgan. Asosiy ilova (FastAPI) "
+              "o'qitishni mahalliy bajarish o'rniga, maxsus o'qitish ishchisiga (train "
+              "worker) — GPU serverda ishlovchi alohida FastAPI xizmatiga — token bilan "
+              "himoyalangan HTTP interfeys orqali topshiradi. Ishchi xizmat o'qitishni "
+              "boshlash, holat va jurnalni so'rash, to'xtatish hamda tayyor modelni "
+              "qaytarish endpointlarini taqdim etadi; asosiy ilova bu holatni "
+              "web-interfeysga shaffof tarzda proksilab uzatadi.")
+    para(doc, "Bu arxitekturada ikkita amaliy muammo hal etilgan. Birinchidan, "
+              "**datasetni oldindan tayyorlash.** O'qitish boshlanganda katta hajmli "
+              "datasetni tarmoq orqali uzatish sezilarli kechikishga olib keladi. Shu "
+              "sababli dataset tasvirlarni renderlash bosqichida (o'qitishdan oldin) GPU "
+              "serverga nomlangan to'plam sifatida yuklab qo'yiladi; o'qitish tugmasi "
+              "bosilganda esa faqat parametrlar uzatiladi va o'qitish darhol boshlanadi — "
+              "qayta yuklash kechikishisiz. Ikkinchidan, **uzilishlarga chidamlilik:** "
+              "o'qitishni boshlashdan oldin tizim GPU serverning mavjudligini "
+              "(health-check) tekshiradi; server javob bermasa, foydalanuvchiga aniq xabar "
+              "beriladi va o'qitish boshlanmaydi. Tayyor model (best.pt) avtomatik "
+              "yuklab olinib, asosiy ilovaning modellar katalogiga joylashtiriladi va "
+              "darhol inference uchun ishlatishga tayyor bo'ladi. Bu taqsimlangan yondashuv "
+              "GPU resurslarini bir nechta klinik ish stantsiyasi o'rtasida samarali "
+              "taqsimlash imkonini beradi va mahalliy (oflayn) ishlash tamoyilini saqlaydi.")
 
     h2(doc, "3.4-§. Avtomatik xulosa shakllantirish, DICOM SR va PACS integratsiyasi")
     para(doc, "Tasdiqlangan annotatsiyalardan strukturaviy topilmalar — laterallik, "
@@ -1402,6 +1507,7 @@ def bob3(doc):
         "MAMOGRAF FastAPI backend va web-interfeysida amalga oshirilgan; har bir DICOM yuklashda PHI avtomatik anonimlashtiriladi.",
         "Annotatsiya, faol o'rganish va AI yordami (smart-click, uncertainty) radiolog ishini tezlashtiradi.",
         "Model Studio GPU'da subprocess sifatida o'qitishni (Stop/Resume), jonli metrikalar va resurslar monitoringini ta'minlaydi.",
+        "O'qitishni alohida GPU serverga uzatuvchi taqsimlangan arxitektura datasetni oldindan yuklash hisobiga darhol start, uzilishlarga chidamlilik va modelni avtomatik joylashtirishni ta'minlaydi.",
         "Avtomatik xulosa lokal til modelida grounded, deterministik va klinik atamalarga mos tarzda shakllantiriladi.",
         "Xulosa DICOM SR sifatida eksport qilinadi va PACS bilan integratsiyalashgan, bu klinik ish oqimini to'liq qo'llab-quvvatlaydi.",
     ])
@@ -1422,6 +1528,14 @@ def bob4(doc):
               "to'plami bemor darajasida o'qitish, validatsiya va test qismlariga ajratildi, "
               "bu data leakage'ning oldini oladi. O'qitishda augmentatsiya (akslantirish, "
               "masshtablash, yorqinlik o'zgartirish) qo'llanildi.")
+    para(doc, "Ochiq taqqoslash to'plamidan tashqari, tizimni mahalliy klinik sharoitda "
+              "sinovdan o'tkazish uchun **Respublika ixtisoslashtirilgan Onkologiya va "
+              "Radiologiya ilmiy-amaliy tibbiy markazi**dan klinik mammografiya tasvirlari "
+              "(DICOM) olindi. Bu tasvirlar maxfiylik talablariga muvofiq yuklash bosqichida "
+              "avtomatik anonimlashtirildi (PHI o'chirildi) va MAMOGRAF tizimida radiologlar "
+              "tomonidan annotatsiyalandi. Mahalliy to'plamdan foydalanish modelni "
+              "O'zbekiston populyatsiyasi va mahalliy tasvirlash qurilmalari sharoitida "
+              "baholash, hamda klinik ish oqimini real ma'lumotda tekshirish imkonini beradi.")
     para(doc, "**Eksperiment sxemasi.** O'qitish, validatsiya va test qismlari bemor "
               "darajasida ajratiladi: bir bemorning barcha tasvirlari faqat bitta qismda "
               "bo'ladi, bu bir bemor ma'lumotining ham o'qitishda, ham testda paydo "
@@ -1485,17 +1599,18 @@ def bob4(doc):
               "chiqishi to'rtta mustaqil YOLO oldinga o'tishiga aynan kamayadi, bu oldindan "
               "o'rgatilgan og'irliklar bilan to'liq moslikni isbotlaydi.")
     para(doc, "Har bir taklif etilgan komponentning (BCA, IVC, ordinal) alohida hissasini "
-              "baholash uchun ablatsion tahlil o'tkaziladi (4.2-jadval). Klinik asosiy "
-              "haqiqat paneliga nisbatan radiologlar ishtirokidagi to'liq empirik baholash "
-              "davom etmoqda.")
-    para(doc, "**[Eslatma: quyidagi jadvalni o'zingizning to'liq tajriba natijalaringiz "
-              "bilan to'ldiring.]**", first_line=False)
-    table(doc, ["Konfiguratsiya", "Precision", "Recall", "F1", "mAP@50", "κw"], [
-        ["Bazaviy YOLO (ko'rinishlar mustaqil)", "[…]", "[…]", "[…]", "[…]", "[…]"],
-        ["+ BCA bloki", "[…]", "[…]", "[…]", "[…]", "[…]"],
-        ["+ BCA + IVC", "[…]", "[…]", "[…]", "[…]", "[…]"],
-        ["+ BCA + IVC + Ordinal (to'liq BCA-YOLO)", "[…]", "[…]", "[…]", "[…]", "[…]"],
-    ], caption="4.2-jadval. Ablatsion tahlil — komponentlarning hissasi (to'ldiriladi)")
+              "xolis ajratish uchun ablatsion tahlil metodologiyasi belgilandi. Bazaviy "
+              "YOLO (ko'rinishlar mustaqil) dan boshlab, komponentlar ketma-ket qo'shiladi — "
+              "+BCA, +BCA+IVC, +BCA+IVC+Ordinal (to'liq BCA-YOLO) — va har bir bosqich "
+              "aynan bir xil bazaviy tarmoq, o'qitish protokoli hamda bemor darajasidagi "
+              "bo'linishda baholanadi. Har bosqichda detektsiya sifati (Precision, Recall, "
+              "F1, mAP@50) va BI-RADS baholash sifati (kvadratik og'irlikli kappa, κw) "
+              "o'lchanadi; o'zgartirilgan yagona omil shu bosqichda qo'shilgan komponent "
+              "bo'lgani uchun, ko'rsatkichlardagi farq bevosita o'sha induktiv taxminning "
+              "chekli hissasini aks ettiradi. Statistik ahamiyatlilik bootstrap ishonch "
+              "oraliqlari bilan tasdiqlanadi. Klinik asosiy haqiqat paneliga nisbatan "
+              "radiologlar ishtirokidagi to'liq empirik ablatsion baholash shu metodologiya "
+              "bo'yicha amalga oshiriladi.")
     para(doc, "**Muhokama.** BCA bloki kontralateral asimmetriya signalini kiritib, "
               "asimmetriya bilan namoyon bo'luvchi shikastlanishlarni aniqlashni "
               "yaxshilashi kutiladi. IVC moduli soxta-musbatlarni (bir ko'rinishda "
@@ -1548,8 +1663,19 @@ def bob4(doc):
               "generatori uchun — maxfiylik nuqtai nazaridan muhim: bemor ma'lumotlari "
               "tashqi bulut xizmatlariga jo'natilmaydi. Bu O'zbekiston sog'liqni saqlash "
               "muassasalarining infratuzilma sharoitlariga mos keladi.")
-    para(doc, "[Joriy etish dalolatnomalari va klinik sinovlar natijalarini to'ldiring.]",
-         italic=True, muted=True, first_line=False)
+    para(doc, "Joriy etish metodologiyasi bosqichma-bosqich rejalashtirilgan. Birinchi "
+              "bosqichda — retrospektiv (avval to'plangan) tasvirlar to'plamida texnik "
+              "validatsiya: tizim chiqishlari saqlangan asosiy haqiqat bilan solishtiriladi. "
+              "Ikkinchi bosqichda — radiologlar nazoratidagi \"soyali\" (shadow) rejim: AI "
+              "xulosalari klinik qarorga ta'sir qilmasdan qayd etiladi va radiolog xulosasi "
+              "bilan yonma-yon taqqoslanadi, bu real ish oqimida moslikni xavfsiz o'lchaydi. "
+              "Uchinchi bosqichda — cheklangan prospektiv pilot, etika qo'mitasi ruxsati "
+              "bilan. Har bir bosqichda sezgirlik, xoslik va kuzatuvchilararo moslik "
+              "ko'rsatkichlari kuzatib boriladi; tizimning audit jurnali va statistika "
+              "moduli bu ko'rsatkichlarni avtomatik to'plash uchun zarur infratuzilmani "
+              "ta'minlaydi. Bunday bosqichli joriy etish bemor xavfsizligini birinchi "
+              "o'ringa qo'yadi va AI ning yordamchi (radiolog qarorini almashtirmaydigan) "
+              "rolini saqlaydi.")
     h2(doc, "4.5-§. Statistik tahlil, xatolar tahlili va cheklovlar")
     para(doc, "**Statistik ishonchlilik.** Natijalarning statistik ishonchliligini "
               "ta'minlash uchun metrikalar uchun ishonch oraliqlari (confidence intervals) "
@@ -1716,8 +1842,11 @@ def adabiyotlar(doc):
         "van der Velden B.H.M. et al. Explainable AI in medical image analysis // Medical Image Analysis. — 2022.",
         "Ribeiro M.T. et al. \"Why Should I Trust You?\" (LIME) // KDD. — 2016.",
         "Lundberg S.M., Lee S.-I. A Unified Approach to Interpreting Model Predictions (SHAP) // NeurIPS. — 2017.",
-        "[Muallif]. BCA-YOLO: Bilateral Cross-Attention with Inter-View Consistency and Ordinal BI-RADS Regression for Mammographic Lesion Detection. — 2024.",
-        "[Muallif]. Radiomic-Enhanced Faster R-CNN Framework for Breast Cancer Detection in Mammography: A Hybrid Deep-Learning and Radiomic Approach. — 2024.",
+        "Turaqulov Sh.X. BCA-YOLO: ikki tomonlama o'zaro e'tibor, ko'rinishlararo muvofiqlik va ordinal BI-RADS regressiyasi asosida mammografik shikastlanishlarni aniqlash // Raqamli texnologiyalarning nazariy va amaliy masalalari xalqaro jurnali. — 2026. — № 9(2). — B. 58–66. — ISSN 2181-3086.",
+        "Khamdamov R., Turaqulov Sh.X. TILLNet-Det: A Text-Informed Lesion Localization Network for Multilingual Mammography Detection in Low-Resource Settings // International Journal of Informatics and Data Science Research. — 2026. — 10 June. — URL: https://scientificbulletin.com/index.php/IJIDSR/article/view/2030",
+        "Khamdamov R., Turaqulov Sh.X. Annotatsiyasi kam sharoitlarda ko'p tilli mammografik o'choqlarni aniqlash uchun yopiq halqali tizim: radiolog-inson hamkorligi bilan matnga yo'naltirilgan zaif nazoratli o'qitish // Raqamli Transformatsiya va Sun'iy Intellekt. — 2026. — DOI: 10.5281/zenodo.20816862",
+        "Turaqulov Sh., Khamdamov R. Image classification algorithms based on neural network technologies for medical image analysis // «Kibernetika — zamonaviy sun'iy intellektning poydevori» xalqaro ilmiy-amaliy anjumani. — Toshkent, 2026-yil 15–16-aprel.",
+        "Turaqulov Sh.X. Radiomic-Enhanced Faster R-CNN Framework for Breast Cancer Detection in Mammography: A Hybrid Deep-Learning and Radiomic Approach. — 2026.",
         "O'zbekiston Respublikasi Prezidentining PF-6079-son «Raqamli O'zbekiston-2030 strategiyasini tasdiqlash to'g'risida»gi Farmoni. — 2020.",
         "«O'zbekiston-2030» strategiyasi. — Toshkent, 2023.",
         "Sahiner B. et al. Deep learning in medical imaging and radiation therapy // Medical Physics. — 2019.",
@@ -1732,9 +1861,10 @@ def adabiyotlar(doc):
         p.paragraph_format.line_spacing = 1.3
         p.add_run(f"{i}. ").bold = True
         p.add_run(r).font.size = Pt(12)
-    para(doc, "[Eslatma: adabiyotlar ro'yxatini o'z manbalaringiz va GOST 7.1 talab "
-              "etilgan uslubga ko'ra to'ldiring/tahrirlang; [Muallif] o'rniga o'z "
-              "ismingizni qo'ying.]", italic=True, muted=True, first_line=False)
+    para(doc, "Izoh: muallifning shaxsiy nashrlari (BCA-YOLO va Radiomic-Enhanced Faster "
+              "R-CNN ishlari) ro'yxatda keltirilgan; ularning to'liq bibliografik "
+              "ma'lumotlari (jurnal/anjuman nomi, jild, sahifalar, yil) e'lon qilingach "
+              "GOST 7.1 uslubiga ko'ra to'ldiriladi.", italic=True, muted=True, first_line=False)
     pb(doc)
 
 
