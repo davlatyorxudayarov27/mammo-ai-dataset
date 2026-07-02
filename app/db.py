@@ -183,6 +183,39 @@ CREATE TABLE IF NOT EXISTS review_decisions (
 CREATE INDEX IF NOT EXISTS idx_review_status ON review_decisions(status);
 CREATE INDEX IF NOT EXISTS idx_review_reviewer ON review_decisions(reviewer);
 CREATE INDEX IF NOT EXISTS idx_review_sop ON review_decisions(sop_uid);
+
+-- Foydalanuvchi harakatlari auditi (kim, qachon, nima qildi)
+CREATE TABLE IF NOT EXISTS audit_log (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  ts TEXT NOT NULL,
+  username TEXT,
+  role TEXT,
+  action TEXT,
+  method TEXT,
+  path TEXT,
+  status INTEGER,
+  ip TEXT,
+  detail TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_audit_ts ON audit_log(ts);
+CREATE INDEX IF NOT EXISTS idx_audit_user ON audit_log(username);
+CREATE INDEX IF NOT EXISTS idx_audit_action ON audit_log(action);
+
+-- Savatcha: o'chirilgan obyektlar (qayta tiklash uchun snapshot)
+CREATE TABLE IF NOT EXISTS trash (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  ts TEXT NOT NULL,
+  deleted_by TEXT,
+  resource_type TEXT NOT NULL,
+  resource_id TEXT NOT NULL,
+  label TEXT,
+  snapshot TEXT NOT NULL,
+  blob_path TEXT,
+  restored_at TEXT,
+  restored_by TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_trash_type ON trash(resource_type, restored_at);
+CREATE INDEX IF NOT EXISTS idx_trash_ts ON trash(ts);
 """
 
 _init_lock = threading.Lock()

@@ -493,6 +493,7 @@
       <button id="aiAcceptAllBtn" title="Barcha takliflarni qabul qilish" hidden>✓ Hammasini qabul</button>
       <button id="aiClearBtn" title="AI takliflarini tozalash" hidden>✕</button>
       <button id="aiHeatmapBtn" class="tool" title="Modellar kelishmaslik xaritasi (A3) — qaerlarda modellar farqlanadi" hidden>🌡 Heatmap</button>
+      <button id="diagBtn" class="tool" title="Tashxis — joriy rasm uchun benign/malignant klassifikatsiya" hidden>🩺 Tashxis</button>
       <span class="sep"></span>
       <label>Frame <input type="range" id="frameSlider" min="0" max="0" value="0" disabled /></label>
       <span id="frameLabel">0 / 0</span>
@@ -534,6 +535,7 @@
         <div class="img-stack" id="imgStack" hidden>
           <img id="dicomImg" alt="" draggable="false" />
           <img id="uncertaintyOverlay" alt="" draggable="false" hidden />
+          <img id="gmicOverlay" alt="" draggable="false" hidden />
           <svg id="annoSvg" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1 1" preserveAspectRatio="none"></svg>
         </div>
         <!-- (C1) 4-view side-by-side -->
@@ -565,6 +567,7 @@
   </main>
 
   <aside class="meta-pane">
+    <div id="diagBox" class="diag-box" hidden></div>
     <div class="tabs right">
       <button class="tab active" data-rtab="meta">Metadata</button>
       <button class="tab" data-rtab="anno">Annotatsiyalar <span class="badge" id="annoCount">0</span></button>

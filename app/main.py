@@ -25,6 +25,7 @@ from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
 
 from . import annotations as annot_store
+from . import audit as audit_mod
 from . import auth as auth_mod
 from . import db as db_mod
 from . import deidentify as deid
@@ -37,6 +38,10 @@ from . import inference as inf
 from . import pacs as pacs_mod
 from . import remote_train as remote_train
 from . import ws as ws_mod
+try:
+    from . import gmic_infer as gmic_infer
+except Exception:  # vendored GMIC yoki numpy yo'q bo'lsa — GMIC funksiyasi o'chadi
+    gmic_infer = None
 from .dicom_utils import (
     NoPixelDataError, auto_window, extract_sr_content, load_frame_array, quick_summary,
     read_metadata, render_frame_png,
@@ -45,6 +50,17 @@ from .dicom_utils import (
 BASE_DIR = Path(__file__).resolve().parent
 UPLOAD_DIR = BASE_DIR / "uploads"
 UPLOAD_DIR.mkdir(exist_ok=True)
+# Savatcha: o'chirilgan fayllar (model/.dcm) shu yerda saqlanadi — tiklash uchun
+TRASH_DIR = BASE_DIR / "_trash"
+TRASH_DIR.mkdir(exist_ok=True)
+
+
+def _trash_file(src: Path) -> str:
+    """Faylni savatcha papkaga ko'chiradi, yangi yo'lni (str) qaytaradi."""
+    dest = TRASH_DIR / f"{uuid.uuid4().hex}__{src.name}"
+    import shutil
+    shutil.move(str(src), str(dest))
+    return str(dest)
 ANNOT_DIR = BASE_DIR / "annotations"
 ANNOT_DIR.mkdir(exist_ok=True)
 STATIC_DIR = BASE_DIR / "static"
@@ -241,15 +257,90 @@ _CSP = (
     "frame-ancestors 'none';"
 )
 
+# Math Mentor mini-ilovasi (/mentor) inline skript + MathJax CDN ishlatadi.
+# Faqat shu yo'l uchun yumshatilgan CSP; asosiy tibbiy ilova qat'iy _CSP da qoladi.
+_CSP_MENTOR = (
+    "default-src 'self'; "
+    "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
+    "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
+    "img-src 'self' data: blob:; "
+    "font-src 'self' data: https://cdn.jsdelivr.net; "
+    "connect-src 'self'; "
+    "object-src 'none'; "
+    "base-uri 'self';"
+)
+
+
+# --- Audit: qaysi so'rovlar loglanadi (muhim harakatlar) ------------------- #
+_AUDIT_GET_PREFIXES = ("/api/db/patient",)   # bemor yozuvini ochish/ko'rish
+_AUDIT_SKIP_EXACT = {"/api/auth/me"}
+
+
+def _should_audit(method: str, path: str) -> bool:
+    if not path.startswith("/api/"):
+        return False
+    if path in _AUDIT_SKIP_EXACT:
+        return False
+    if path.startswith("/api/audit") or path.startswith("/api/trash"):
+        return False  # audit/savatchani ko'rishning o'zini loglamaymiz (shovqin)
+    if method in ("POST", "PUT", "PATCH", "DELETE"):
+        return True
+    if method == "GET" and any(path.startswith(p) for p in _AUDIT_GET_PREFIXES):
+        return True
+    return False
+
+
+def _audit_action(method: str, path: str) -> str:
+    if path.startswith("/api/auth/login"):
+        return "auth.login"
+    if path.startswith("/api/auth/logout"):
+        return "auth.logout"
+    seg = [s for s in path.split("/") if s]
+    base = seg[1] if len(seg) > 1 else "api"
+    verb = {"POST": "create", "PUT": "update", "PATCH": "update",
+            "DELETE": "delete", "GET": "view"}.get(method, method.lower())
+    return f"{base}.{verb}"
+
+
+def _audit_identity(request: Request):
+    auth = request.headers.get("Authorization", "")
+    if auth.startswith("Bearer "):
+        try:
+            payload = auth_mod.decode_token(auth[7:])
+            return payload.get("sub"), payload.get("role")
+        except Exception:
+            return None, None
+    return None, None
+
 
 @app.middleware("http")
 async def security_headers(request: Request, call_next):
     response = await call_next(request)
+    # --- Foydalanuvchi harakati auditi -------------------------------------- #
+    try:
+        method = request.method
+        path = request.url.path
+        if method != "OPTIONS" and _should_audit(method, path):
+            uname, role = _audit_identity(request)
+            try:
+                ip = get_remote_address(request)
+            except Exception:
+                ip = None
+            audit_mod.log_action(
+                uname, role, _audit_action(method, path),
+                method=method, path=path,
+                status=getattr(response, "status_code", None), ip=ip,
+            )
+    except Exception:
+        pass
     response.headers["X-Content-Type-Options"] = "nosniff"
-    response.headers["X-Frame-Options"] = "DENY"
     response.headers["Referrer-Policy"] = "no-referrer"
     response.headers["Permissions-Policy"] = "interest-cohort=()"
-    response.headers["Content-Security-Policy"] = _CSP
+    if request.url.path.startswith("/mentor"):
+        response.headers["Content-Security-Policy"] = _CSP_MENTOR
+    else:
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["Content-Security-Policy"] = _CSP
     # Frontend statikasi (app.js/style.css/index.html) brauzerда eskirib qolmasligi
     # uchun har doim qayta tekshirilsin. ETag/Last-Modified bor — o'zgarmasa 304 (tez),
     # o'zgargan bo'lsa yangi fayl darrov keladi (hard-refresh shart emas).
@@ -561,8 +652,11 @@ def admin_delete_user(
 ):
     if username == admin.get("sub"):
         raise HTTPException(400, "cannot delete yourself")
-    if not auth_mod.get_user_by_username(username):
+    row = auth_mod.get_user_by_username(username)
+    if not row:
         raise HTTPException(404, "user not found")
+    audit_mod.trash_db_row("users", dict(row), "user", username,
+                           label=f"Foydalanuvchi: {username}", deleted_by=admin.get("sub"))
     with db_mod.get_conn() as c:
         c.execute("DELETE FROM users WHERE username = ?", (username,))
         c.commit()
@@ -802,6 +896,86 @@ def _training_log_path(run_id: str) -> Path:
     return d / f"{run_id}.log"
 
 
+# Run tarixi diskka saqlanadi (app_db volume) — restart/logout'dan keyin ham qoladi.
+TRAINING_RUNS_FILE = BASE_DIR / "training_runs" / "_index.json"
+
+
+def _save_training_runs() -> None:
+    """TRAINING_RUNS indeksini diskka atomik yozadi. _last_log tashlanadi
+    (log matni alohida .log faylda saqlanadi)."""
+    try:
+        TRAINING_RUNS_FILE.parent.mkdir(parents=True, exist_ok=True)
+        slim = {
+            rid: {k: v for k, v in st.items() if k not in ("_last_log",)}
+            for rid, st in TRAINING_RUNS.items()
+        }
+        tmp = TRAINING_RUNS_FILE.with_name("_index.json.tmp")
+        tmp.write_text(json.dumps(slim, ensure_ascii=False, default=str), encoding="utf-8")
+        tmp.replace(TRAINING_RUNS_FILE)
+    except Exception:
+        pass
+
+
+def _load_training_runs() -> None:
+    """Startupda saqlangan run tarixini xotiraga yuklaydi va indeksdagi
+    ro'yxatdan tashqari disk'dagi eski runlarni (log fayl/papkalardan) tiklaydi."""
+    try:
+        if TRAINING_RUNS_FILE.exists():
+            data = json.loads(TRAINING_RUNS_FILE.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                for rid, st in data.items():
+                    if isinstance(st, dict):
+                        # Restartdan keyin lokal subprocess yo'q — "running" eski
+                        # lokal runlarni "uzilgan" deb belgilaymiz (remote o'zini tuzatadi)
+                        if st.get("status") == "running" and not st.get("remote"):
+                            st["status"] = "interrupted"
+                        TRAINING_RUNS[rid] = st
+    except Exception:
+        pass
+    # Indeksda yo'q, lekin disk'da log/papka bor eski runlarni tiklash
+    try:
+        runs_dir = BASE_DIR / "training_runs"
+        for log_file in runs_dir.glob("*.log"):
+            rid = log_file.stem
+            if rid in TRAINING_RUNS:
+                continue
+            entry = {
+                "run_id": rid,
+                "status": "recovered",
+                "recovered": True,
+                "log_path": str(log_file),
+                "project_dir": str(runs_dir / rid),
+            }
+            try:
+                entry["started_at"] = datetime.fromtimestamp(
+                    log_file.stat().st_mtime, tz=timezone.utc).isoformat()
+            except Exception:
+                pass
+            # Metrikalar — results.csv (mavjud bo'lsa)
+            try:
+                rows = _read_results_csv(runs_dir / rid)
+                if rows:
+                    entry["last_metrics"] = rows[-1]
+                    entry["epochs_done"] = len(rows)
+            except Exception:
+                pass
+            # Status — log mazmunidan taxmin
+            try:
+                tail = log_file.read_text(encoding="utf-8", errors="replace")[-3000:]
+                if "# DONE" in tail or "model_deployed" in tail or "Deploy:" in tail:
+                    entry["status"] = "done"
+                elif "FAILED" in tail or "Traceback" in tail:
+                    entry["status"] = "failed"
+                elif "STOPPED" in tail:
+                    entry["status"] = "stopped"
+            except Exception:
+                pass
+            TRAINING_RUNS[rid] = entry
+    except Exception:
+        pass
+    _save_training_runs()
+
+
 # Ishlab turgan training subprocess'lar: run_id -> subprocess.Popen
 TRAIN_PROCS: dict = {}
 
@@ -852,6 +1026,7 @@ def _monitor_training(run_id: str, proc: "subprocess.Popen", logf) -> None:
     state["finished_at"] = datetime.now(timezone.utc).isoformat()
     state.pop("_stop_requested", None)
     TRAINING_RUNS[run_id] = state
+    _save_training_runs()
     TRAIN_PROCS.pop(run_id, None)
 
 
@@ -893,6 +1068,7 @@ def _launch_training(run_id: str, params: dict) -> None:
                 "remote": True,
             })
         TRAINING_RUNS[run_id] = state
+        _save_training_runs()
         return
     # --- Lokal subprocess yo'li (eski xatti-harakat) ---------------------- #
 
@@ -923,6 +1099,7 @@ def _launch_training(run_id: str, params: dict) -> None:
         "params": params,
     })
     TRAINING_RUNS[run_id] = state
+    _save_training_runs()
     threading.Thread(target=_monitor_training, args=(run_id, proc, logf), daemon=True).start()
 
 
@@ -1001,6 +1178,7 @@ def _remote_status(run_id: str, state: dict, tail: int) -> dict:
         state.setdefault("finished_at", datetime.now(timezone.utc).isoformat())
 
     TRAINING_RUNS[run_id] = state
+    _save_training_runs()
     out = {k: v for k, v in state.items() if k not in ("_stop_requested", "_last_log")}
     return {"run_id": run_id, **out, "log_tail": log_tail}
 
@@ -1063,6 +1241,7 @@ def training_run(
                 "GPU serverga ulanildi, lekin GPU/CUDA topilmadi — training boshlanmadi.")
     run_id = "tr" + datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S") + "_" + uuid.uuid4().hex[:6]
     TRAINING_RUNS[run_id] = {"status": "queued", "queued_at": datetime.now(timezone.utc).isoformat(), "params": body.model_dump()}
+    _save_training_runs()
     _launch_training(run_id, body.model_dump())
     return {"run_id": run_id, "status": "running"}
 
@@ -1084,6 +1263,7 @@ def training_stop(run_id: str, _user: dict = Depends(auth_mod.require_user)):
             raise HTTPException(502, f"Masofaviy to'xtatish xatosi: {e}")
         state["status"] = "stopping"
         TRAINING_RUNS[run_id] = state
+        _save_training_runs()
         return {"run_id": run_id, "status": "stopping"}
     proc = TRAIN_PROCS.get(run_id)
     if proc is None or proc.poll() is not None:
@@ -1215,13 +1395,19 @@ def _read_results_csv(project_dir: Path) -> list[dict]:
             row: dict = {}
             for h, v in zip(headers, vals):
                 try:
-                    row[h] = float(v)
+                    fv = float(v)
+                    # nan/inf JSON'ga mos emas (FastAPI rad etadi) -> None
+                    row[h] = fv if (fv == fv and fv not in (float("inf"), float("-inf"))) else None
                 except ValueError:
                     row[h] = v
             rows.append(row)
     except Exception:
         return []
     return rows
+
+
+# Endi _read_results_csv aniqlangan — startupda run tarixini yuklaymiz/tiklaymiz
+_load_training_runs()
 
 
 @app.get("/api/training/metrics/{run_id}")
@@ -1678,7 +1864,13 @@ def delete_model(name: str, _user: dict = Depends(auth_mod.require_user)):
     if not p.exists():
         raise HTTPException(404, f"Model topilmadi: {safe}")
     try:
-        p.unlink()
+        blob = _trash_file(p)  # unlink emas — savatchaga ko'chiramiz
+        audit_mod.trash_put(
+            "model", safe,
+            {"kind": "file", "orig_path": str(p)},
+            label=f"Model: {safe}", blob_path=blob,
+            deleted_by=_user.get("sub"),
+        )
     except Exception as e:
         raise HTTPException(500, f"O'chirib bo'lmadi: {e}")
     # Inference cache'ni tozalash
@@ -2088,7 +2280,21 @@ def auto_window_ep(file_id: str, frame: int = 0):
 def delete_file(file_id: str, _user: dict = Depends(auth_mod.require_user)):
     p = UPLOAD_DIR / f"{file_id}.dcm"
     if p.exists():
-        p.unlink()
+        # Asl nomni (DICOM ichidan) belgi sifatida olishga harakat
+        label = f"Yuklangan fayl: {file_id}"
+        try:
+            ds = pydicom.dcmread(p, stop_before_pixels=True, force=True)
+            nm = str(getattr(ds, "PatientName", "") or "")
+            if nm:
+                label = f"Fayl ({nm}): {file_id}"
+        except Exception:
+            pass
+        blob = _trash_file(p)  # unlink emas — savatchaga
+        audit_mod.trash_put(
+            "file", file_id,
+            {"kind": "file", "orig_path": str(p)},
+            label=label, blob_path=blob, deleted_by=_user.get("sub"),
+        )
     return {"ok": True}
 
 
@@ -3000,10 +3206,13 @@ def pacs_add_server(
 @app.delete("/api/pacs/servers/{srv_id}")
 def pacs_delete_server(srv_id: int, _admin: dict = Depends(auth_mod.require_role("admin"))):
     with db_mod.get_conn() as c:
-        cur = c.execute("DELETE FROM pacs_servers WHERE id=?", (srv_id,))
-        c.commit()
-        if cur.rowcount == 0:
+        row = c.execute("SELECT * FROM pacs_servers WHERE id=?", (srv_id,)).fetchone()
+        if not row:
             raise HTTPException(404, "not found")
+        audit_mod.trash_db_row("pacs_servers", dict(row), "pacs_server", srv_id,
+                               label=f"PACS: {row['name']}", deleted_by=_admin.get("sub"))
+        c.execute("DELETE FROM pacs_servers WHERE id=?", (srv_id,))
+        c.commit()
     return {"ok": True}
 
 
@@ -3184,10 +3393,14 @@ def pacs_to_worklist(
 @app.delete("/api/worklist/{wl_id}")
 def delete_worklist(wl_id: int, _admin: dict = Depends(auth_mod.require_role("admin"))):
     with db_mod.get_conn() as c:
-        cur = c.execute("DELETE FROM worklist WHERE id = ?", (wl_id,))
-        c.commit()
-        if cur.rowcount == 0:
+        row = c.execute("SELECT * FROM worklist WHERE id = ?", (wl_id,)).fetchone()
+        if not row:
             raise HTTPException(404, "not found")
+        audit_mod.trash_db_row("worklist", dict(row), "worklist", wl_id,
+                               label=f"Worklist: {row['patient_name'] or row['patient_id']}",
+                               deleted_by=_admin.get("sub"))
+        c.execute("DELETE FROM worklist WHERE id = ?", (wl_id,))
+        c.commit()
     return {"ok": True}
 
 
@@ -4051,13 +4264,15 @@ def delete_template(
 ):
     with db_mod.get_conn() as c:
         row = c.execute(
-            "SELECT created_by FROM annotation_templates WHERE id = ?", (tpl_id,)
+            "SELECT * FROM annotation_templates WHERE id = ?", (tpl_id,)
         ).fetchone()
         if not row:
             raise HTTPException(404, "template not found")
         is_admin = user.get("role") == "admin"
-        if not is_admin and row[0] != user["sub"]:
+        if not is_admin and row["created_by"] != user["sub"]:
             raise HTTPException(403, "can only delete own templates")
+        audit_mod.trash_db_row("annotation_templates", dict(row), "template", tpl_id,
+                               label=f"Shablon: {row['name']}", deleted_by=user.get("sub"))
         c.execute("DELETE FROM annotation_templates WHERE id = ?", (tpl_id,))
         c.commit()
     return {"ok": True}
@@ -4325,12 +4540,73 @@ def db_delete_link(source: str, ref: str, _user: dict = Depends(auth_mod.require
     if not ref:
         raise HTTPException(400, "missing ref")
     with db_mod.get_conn() as c:
+        row = c.execute(
+            "SELECT * FROM dicom_patient_links WHERE source = ? AND ref = ?",
+            (source, ref),
+        ).fetchone()
+        if row:
+            audit_mod.trash_db_row("dicom_patient_links", dict(row), "db_link",
+                                   f"{source}:{ref}",
+                                   label=f"Bog'lanish: {source}/{ref} → {row['patient_id']}",
+                                   deleted_by=_user.get("sub"))
         c.execute(
             "DELETE FROM dicom_patient_links WHERE source = ? AND ref = ?",
             (source, ref),
         )
         c.commit()
     return {"ok": True}
+
+
+# --------------------------------------------------------------------------- #
+#  Audit log va Savatcha (faqat admin)                                         #
+# --------------------------------------------------------------------------- #
+@app.get("/api/audit")
+def audit_list(
+    username: Optional[str] = None,
+    action: Optional[str] = None,
+    since: Optional[str] = None,
+    until: Optional[str] = None,
+    q: Optional[str] = None,
+    limit: int = 200,
+    offset: int = 0,
+    _admin: dict = Depends(auth_mod.require_role("admin")),
+):
+    """Foydalanuvchi harakatlari jurnali (admin)."""
+    return audit_mod.list_audit(username, action, since, until, q, limit, offset)
+
+
+@app.get("/api/audit/users")
+def audit_user_list(_admin: dict = Depends(auth_mod.require_role("admin"))):
+    return {"users": audit_mod.audit_users()}
+
+
+@app.get("/api/trash")
+def trash_list(
+    include_restored: bool = False,
+    resource_type: Optional[str] = None,
+    _admin: dict = Depends(auth_mod.require_role("admin")),
+):
+    """Savatcha: o'chirilgan obyektlar (admin)."""
+    return {"items": audit_mod.list_trash(include_restored, resource_type)}
+
+
+@app.post("/api/trash/{trash_id}/restore")
+def trash_restore(trash_id: int, admin: dict = Depends(auth_mod.require_role("admin"))):
+    ok, msg = audit_mod.restore(trash_id, by=admin.get("sub"))
+    if not ok:
+        raise HTTPException(400, msg)
+    # Tiklangan model fayl bo'lsa — inference cache yangilanishi uchun belgilamaymiz
+    # (list_models har chaqirilganda papkani qayta o'qiydi)
+    return {"ok": True, "message": msg}
+
+
+@app.delete("/api/trash/{trash_id}")
+def trash_purge(trash_id: int, _admin: dict = Depends(auth_mod.require_role("admin"))):
+    """Savatchadagi obyektni butunlay o'chiradi (qaytarib bo'lmaydi)."""
+    ok, msg = audit_mod.purge(trash_id)
+    if not ok:
+        raise HTTPException(404, msg)
+    return {"ok": True, "message": msg}
 
 
 def _parse_dicom_name(name: Optional[str]) -> tuple[Optional[str], Optional[str]]:
@@ -4456,7 +4732,11 @@ def inference_status():
     info["available"] = ok
     info["error"] = err if not ok else None
     info["models_dir"] = str(inf.MODELS_DIR)
-    info["models"] = inf.list_models()
+    # Detection dropdown faqat detection modellarini ko'rsatadi; classification
+    # modellari (_cls.pt) alohida "Tashxis" paneli uchun cls_models'da qaytadi.
+    info["models"] = inf.list_detection_models()
+    info["cls_models"] = inf.list_cls_models()
+    info["gmic"] = bool(gmic_infer and gmic_infer.available())
     return info
 
 
@@ -4858,6 +5138,68 @@ def inference_run(request: Request, body: InferenceBody, _user: dict = Depends(a
     return result
 
 
+class ClassifyBody(BaseModel):
+    source: str
+    ref: str
+    frame: int = 0
+    wc: Optional[float] = None
+    ww: Optional[float] = None
+    model: Optional[str] = None
+    imgsz: int = 384
+
+
+@app.post("/api/inference/classify")
+@limiter.limit("30/minute")
+def inference_classify(request: Request, body: ClassifyBody, _user: dict = Depends(auth_mod.require_user)):
+    """Joriy rasm uchun tashxis (benign / malignant) — har klass ehtimoli.
+
+    Afzallik: GMIC (NYU, bizda MIL fine-tune qilingan) — mavjud bo'lsa shu;
+    aks holda YOLO `_cls.pt` klassifikatori.
+    """
+    _validate_source(body.source)
+    _validate_ref(body.source, body.ref)
+
+    if body.source == "upload":
+        path = UPLOAD_DIR / f"{body.ref}.dcm"
+    else:
+        path = _resolve_local(body.ref)
+
+    use_gmic = bool(gmic_infer and gmic_infer.available()) and body.model in (None, "", "gmic")
+    if use_gmic:
+        try:
+            g = gmic_infer.predict_dicom(path)
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        except Exception as e:
+            raise HTTPException(500, f"GMIC tashxis xato: {e}")
+        return {
+            "model": g["model"],
+            "top1_label": g["label"],
+            "top1_conf": max(g["benign"], g["malignant"]),
+            "probs": {"benign": g["benign"], "malignant": g["malignant"]},
+            "view": g.get("view"),
+            "saliency_png": g.get("saliency_png"),
+            "note": "GMIC qoralama — backbone NYU Hologic'da, boshqa apparat uchun klinik emas",
+        }
+
+    cls_models = inf.list_cls_models()
+    if not cls_models:
+        raise HTTPException(400, "Tashxis modeli topilmadi (GMIC yoki app/models/*_cls.pt)")
+    model = body.model or cls_models[0]["name"]
+    if not inf.is_cls_model(model):
+        raise HTTPException(400, "Bu klassifikatsiya modeli emas")
+    try:
+        png_bytes = render_frame_png(path, frame=body.frame, wc=body.wc, ww=body.ww, max_dim=2048)
+    except Exception as e:
+        raise HTTPException(500, f"render failed: {e}")
+    try:
+        return inf.classify_png(png_bytes, model_name=model, imgsz=body.imgsz)
+    except RuntimeError as e:
+        raise HTTPException(503, str(e))
+    except Exception as e:
+        raise HTTPException(500, f"classify failed: {e}")
+
+
 @app.websocket("/ws/dicom")
 async def ws_dicom(websocket: WebSocket, source: str, ref: str, token: str = ""):
     if not token:
@@ -5090,6 +5432,45 @@ def landing_page():
 def app_page():
     """Asosiy ilova (DICOM viewer + login modal)."""
     return FileResponse(str(STATIC_DIR / "index.html"), media_type="text/html")
+
+
+# --------------------------------------------------------------------------- #
+# Math Mentor reverse-proxy: /mentor/* -> mentor xizmati (10.10.0.75:8092)      #
+# Bu yo'l static mount'dan OLDIN turishi shart (aks holda "/" hammasini yutadi).#
+# --------------------------------------------------------------------------- #
+import httpx as _mentor_httpx
+from fastapi import Request as _MentorRequest
+from fastapi.responses import Response as _MentorResponse, RedirectResponse as _MentorRedirect
+
+_MENTOR_URL = os.environ.get("MENTOR_URL", "http://10.10.0.75:8092").rstrip("/")
+
+
+@app.get("/mentor", include_in_schema=False)
+def _mentor_root_redirect():
+    return _MentorRedirect(url="/mentor/")
+
+
+@app.api_route("/mentor/{path:path}", include_in_schema=False,
+               methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"])
+async def _mentor_proxy(path: str, request: _MentorRequest):
+    """/mentor/<path> ni mentor xizmatiga (/<path>) shaffof uzatadi."""
+    target = f"{_MENTOR_URL}/{path}"
+    body = await request.body()
+    fwd_headers = {k: v for k, v in request.headers.items()
+                   if k.lower() not in ("host", "content-length")}
+    try:
+        async with _mentor_httpx.AsyncClient(timeout=900.0) as client:
+            rr = await client.request(request.method, target,
+                                      params=request.query_params,
+                                      content=body, headers=fwd_headers)
+    except Exception as e:  # noqa: BLE001
+        return _MentorResponse(content=f"Mentor xizmatiga ulanib bo'lmadi: {e}".encode(),
+                               status_code=502)
+    drop = {"content-encoding", "transfer-encoding", "connection", "content-length"}
+    out_headers = {k: v for k, v in rr.headers.items() if k.lower() not in drop}
+    return _MentorResponse(content=rr.content, status_code=rr.status_code,
+                           headers=out_headers,
+                           media_type=rr.headers.get("content-type"))
 
 
 app.mount("/", StaticFiles(directory=str(STATIC_DIR), html=True), name="static")

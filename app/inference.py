@@ -136,6 +136,55 @@ def infer_png(
 
 
 # --------------------------------------------------------------------------- #
+# Classification (image-level diagnosis, e.g. benign / malignant)             #
+# Klassifikatsiya modellari fayl nomi `_cls.pt` bilan tugaydi — shu konvensiya #
+# bo'yicha detection modellaridan ajratiladi (detection dropdown'ga tushmaydi).#
+# --------------------------------------------------------------------------- #
+def is_cls_model(name: str) -> bool:
+    return str(name).lower().endswith("_cls.pt")
+
+
+def list_detection_models() -> list[dict]:
+    return [m for m in list_models() if not is_cls_model(m["name"])]
+
+
+def list_cls_models() -> list[dict]:
+    return [m for m in list_models() if is_cls_model(m["name"])]
+
+
+def classify_png(png_bytes: bytes, model_name: str, imgsz: int = 384) -> dict:
+    """Bitta rasm uchun klassifikatsiya — har klass ehtimoli bilan."""
+    ok, err = is_available()
+    if not ok:
+        raise RuntimeError(err)
+    model = get_model(model_name)
+    img = Image.open(io.BytesIO(png_bytes))
+    if img.mode != "RGB":
+        img = img.convert("RGB")
+    results = model.predict(source=img, imgsz=imgsz, verbose=False)
+    if not results:
+        raise RuntimeError("natija yo'q")
+    r = results[0]
+    probs = getattr(r, "probs", None)
+    if probs is None:
+        raise RuntimeError("bu model klassifikatsiya emas (probs topilmadi)")
+    names = r.names if hasattr(r, "names") else getattr(model, "names", {})
+
+    def _nm(i):
+        return str(names.get(int(i), int(i))) if isinstance(names, dict) else str(int(i))
+
+    data = probs.data.cpu().numpy().tolist()
+    top1 = int(probs.top1)
+    return {
+        "model": model_name,
+        "top1_label": _nm(top1),
+        "top1_conf": float(probs.top1conf),
+        "probs": {_nm(i): float(p) for i, p in enumerate(data)},
+        "device": device_info().get("device", "cpu"),
+    }
+
+
+# --------------------------------------------------------------------------- #
 # Weighted Boxes Fusion + ensemble                                            #
 # --------------------------------------------------------------------------- #
 def _iou_xyxy(a, b) -> float:

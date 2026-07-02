@@ -52,6 +52,10 @@ app/models/*.pt
 app/models/*.pth
 app/models/*.onnx
 app/models/*.engine
+# ichki papkalardagi og'irliklar ham (masalan app/models/gmic/*.pt — GMIC 56MB)
+app/models/**/*.pt
+app/models/**/*.pth
+app/models/**/*.onnx
 # README.md app/models/ ichida saqlanadi
 
 # --- Installerlar / katta artifaktlar ---
@@ -63,6 +67,9 @@ app/models/*.engine
 build/
 dist/
 *.spec
+# Git bundle / kod arxivlari (offline transfer artefaktlari — repo'ga kerak emas)
+*.bundle
+update-code.tar.gz
 
 # --- Logs ---
 *.log

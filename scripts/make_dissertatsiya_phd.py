@@ -280,6 +280,7 @@ def mundarija(doc):
         ("3.4-§. Avtomatik xulosa shakllantirish, DICOM SR va PACS integratsiyasi", False),
         ("3.5-§. Maʼlumotlar modeli, dasturiy interfeyslar va ish oqimi", False),
         ("III bob boʻyicha xulosalar", False),
+        ("III bob (davomi). Avtomatlashtirilgan annotatsiya yigʻish quyi tizimining matematik modeli", True),
         ("IV BOB. TAJRIBAVIY TADQIQOTLAR VA AMALIYOTDA QOʻLLASH", True),
         ("4.1-§. Maʼlumotlar toʻplami, eksperiment sxemasi va baholash metodologiyasi", False),
         ("4.2-§. Tajriba natijalari, ablatsion tahlil va muhokama", False),
@@ -1511,6 +1512,26 @@ def bob3(doc):
         "Avtomatik xulosa lokal til modelida grounded, deterministik va klinik atamalarga mos tarzda shakllantiriladi.",
         "Xulosa DICOM SR sifatida eksport qilinadi va PACS bilan integratsiyalashgan, bu klinik ish oqimini to'liq qo'llab-quvvatlaydi.",
     ])
+    pb(doc)
+
+
+# --------------------------------------------------------------------------- #
+# III bob (davomi) — Avtomatlashtirilgan annotatsiya yig'ish quyi tizimi      #
+# (make_maqola_annotatsiya.py modulidan import qilinadi)                      #
+# --------------------------------------------------------------------------- #
+@section
+def bob3a_annotatsiya(doc):
+    import os
+    import sys
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import make_maqola_annotatsiya as ma
+    for nm, tex in ma.ANNOT_FORMULAS.items():
+        render_eq(nm, tex)
+    ma.render_figures()
+    h1(doc, "III bob (davomi). Avtomatlashtirilgan annotatsiya yig'ish quyi "
+            "tizimining matematik modeli")
+    ma.emit_article(doc, h1, h2, para, lead, bullets, eq, table,
+                    IMG=ma.img_fig, top_title=False)
     pb(doc)
 
 
