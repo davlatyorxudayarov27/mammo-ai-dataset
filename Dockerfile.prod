@@ -8,13 +8,20 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PIP_RETRIES=10 \
     # VM network runs a TLS-inspecting proxy whose CA the clean build container
     # does not trust; mark PyPI hosts trusted so pip skips cert verification.
-    PIP_TRUSTED_HOST="pypi.org files.pythonhosted.org pypi.python.org"
+    PIP_TRUSTED_HOST="pypi.org files.pythonhosted.org pypi.python.org download.pytorch.org download-r2.pytorch.org"
 
 WORKDIR /app
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libgl1 libglib2.0-0 \
     && rm -rf /var/lib/apt/lists/*
+
+# CPU-only torch (prod GPU'siz — training masofaviy 10.10.0.72'da). PyPI'dagi
+# `torch` to'liq CUDA build (~2GB nvidia kutubxonalari, behuda). CPU wheel ~192MB
+# va deploy'ni sezilarli tezlashtiradi. requirements.txt'dagi torch>=2.2 shu bilan
+# qondiriladi (pastda qayta o'rnatilmaydi).
+RUN pip install torch==2.12.1+cpu torchvision==0.27.1+cpu \
+    --index-url https://download.pytorch.org/whl/cpu
 
 COPY requirements.txt ./
 RUN pip install -r requirements.txt
