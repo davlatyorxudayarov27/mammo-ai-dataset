@@ -43,7 +43,8 @@ def main():
         page.on("pageerror", lambda e: js_err.append(str(e)))
         page.on("response", lambda r: net_fail.append((r.status, r.url)) if r.status >= 400 else None)
 
-        page.goto(BASE, wait_until="domcontentloaded")
+        # Ilova endi landing sahifa ("/") ortida — SPA "/app" da xizmat qiladi.
+        page.goto(BASE + "/app", wait_until="domcontentloaded")
         page.wait_for_timeout(1500)
 
         def snap():
