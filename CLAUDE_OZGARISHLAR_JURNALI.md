@@ -282,3 +282,14 @@ Endi dev → prod deploy xavfsiz (dev to'liq superset).
   - MUHIM TOPILMA: conf=0.15 da YOLO o'zi 0.907 — boolfs foydasi aynan PAST-ISHONCHLI
     detektsiyalarda (shubhali ROI'larga "ikkinchi fikr") — maqola uchun kuchli argument.
 - To'liq hisobot: `runs/exp_20260710/EKSPERIMENTLAR_HISOBOT.md`.
+
+### 9.2. 📄 Eksperiment natijalari bo'yicha maqola — 3 tilda, OMML formulalar
+- Fayllar: `MAMOGRAF_Maqola_2026_Ansambl_{UZ,RU,EN}.docx` (~1600-1900 so'z, har birida
+  13 tenglama, 5 jadval, 2 grafik).
+- **Formulalar Word native OMML** (`m:oMath`) — oldingi maqolalardagidek matplotlib PNG rasm EMAS.
+  Word/MathType'da to'g'ridan tahrirlanadi. Tekshirildi: pandoc docx→latex OMML'ni to'liq to'g'ri
+  o'qidi (∑ limitlari, kasrlar, x̄ aksent, argmin/argmax ostki limitlari).
+- Skriptlar: `scripts/omml.py` (OMML quruvchi), `scripts/maqola_formulalar.py` (13 formula),
+  `scripts/make_maqola_exp2026.py` (3 tilli matn + grafiklar + docx).
+- Barcha sonlar `runs/exp_20260710/*/`.json dan avtomatik o'qiladi (qo'lda kiritilmagan).
+- Build: `docker run --rm -v $PWD:/work -w /work mamograf-prod-app sh -c "pip install -q python-docx && python scripts/make_maqola_exp2026.py"`
