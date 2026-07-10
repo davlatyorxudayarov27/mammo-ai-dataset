@@ -265,3 +265,20 @@ Endi dev → prod deploy xavfsiz (dev to'liq superset).
 - Eng to'liq **UI/train** kod: dev (`~/plan_project_new/app/`); eng to'liq **xavfsizlik/boolfs** kod: prod volume.
 - Prod kod snapshoti: `backups/prod_code_snapshot_20260710.tar.gz`.
 - Kunlik ma'lumot zaxirasi: `backups/auto/` (cron 02:00, `scripts/auto_backup.sh`).
+
+---
+
+## 9-sessiya — 2026-07-10 (10-iyul, davomi)
+
+### 9.1. 🧪 Xamdamov (boolfs) usuli — 11 eksperiment seriyasi
+- Joy: `~/mamograf_yangilash_21-iyun`, konteynerda CPU'da (GPU kerak bo'lmadi, xizmatlar to'xtatilmadi).
+- Skriptlar: `scripts/run_experiments_20260710.sh`, `scripts/exp04_nsweep.py`; natijalar `runs/exp_20260710/`.
+- Asosiy natijalar (val, GT bilan mos ROI'larda sinf-aniqlik P):
+  - n′ sweep: avtomatik n′*=34 ham CV (0.526), ham val (0.628) bo'yicha optimal deb TASDIQLANDI;
+  - yolo11s: 0.737 → ansambl α=0.7 **0.853** (+11.6 punkt);
+  - yolo11l: 0.800 → **0.867** (+6.7) — eng yuqori mutlaq natija;
+  - v2_ep50: 0.835 → **0.864** (+2.9, α=0.3);
+  - iou=0.5 da ham +11.4; train splitda ham +1.1 (yo'nalish mos);
+  - MUHIM TOPILMA: conf=0.15 da YOLO o'zi 0.907 — boolfs foydasi aynan PAST-ISHONCHLI
+    detektsiyalarda (shubhali ROI'larga "ikkinchi fikr") — maqola uchun kuchli argument.
+- To'liq hisobot: `runs/exp_20260710/EKSPERIMENTLAR_HISOBOT.md`.
