@@ -75,7 +75,12 @@ const AI_ZONE_COLORS = {
   review:      '#eab308',   // sariq
   suspect:     '#ef4444',   // qizil (pulsatsiya — CSS .ai-zone-suspect orqali)
 };
+const AI_ANN_COLOR = '#86efac'; // AI batch (created_by="ai:*") belgilari — och yashil, insondan farqli
+function isAiAnn(a) {
+  return !!(a && a.created_by && String(a.created_by).indexOf('ai:') === 0);
+}
 function colorForAnn(a) {
+  if (isAiAnn(a)) return AI_ANN_COLOR;                              // AI — och yashil
   if (a && a.zone && AI_ZONE_COLORS[a.zone]) return AI_ZONE_COLORS[a.zone];
   return colorFor(a && a.label);
 }

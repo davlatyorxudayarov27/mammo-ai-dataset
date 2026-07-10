@@ -57,6 +57,22 @@
   .ts-gpu .bar-fill { height: 100%; background: linear-gradient(90deg,#22c55e,#ffb000,#ef4444); }
   #stopBtn { background: #7a1f1f; color: #fff; border: 0; padding: 10px 18px; border-radius: 4px; font-size: 14px; cursor: pointer; font-weight: 600 }
   #stopBtn:hover { background: #a02525 }
+  .ts-metric-cards { display: flex; gap: 8px; flex-wrap: wrap; margin: 10px 0 4px }
+  .ts-mcard { flex: 1; min-width: 78px; background: var(--panel-2, #2a2f3e); border: 1px solid var(--border, #333); border-radius: 6px; padding: 8px 6px; text-align: center }
+  .ts-mcard .v { font-size: 19px; font-weight: 700; line-height: 1.1 }
+  .ts-mcard .l { font-size: 10px; color: var(--muted, #888); margin-top: 3px }
+  .ts-params { width: 100%; border-collapse: collapse; font-size: 12px; margin: 6px 0 2px }
+  .ts-params td { padding: 3px 6px; border-bottom: 1px solid var(--border, #333) }
+  .ts-params td:first-child { color: var(--muted, #888); width: 55% }
+  .ts-params code { color: var(--text, #eee) }
+  .ts-cm { border-collapse: collapse; font-size: 12px; margin-top: 6px }
+  .ts-cm th, .ts-cm td { border: 1px solid var(--border, #333); padding: 5px 10px; text-align: center }
+  .ts-cm th { background: var(--panel-2, #2a2f3e); color: var(--muted, #888); font-weight: 600 }
+  .ts-cm .good { color: #22c55e; font-weight: 700 } .ts-cm .bad { color: #ef4444; font-weight: 700 }
+  .ts-mbars { flex: 1; min-width: 220px; font-size: 12px }
+  .ts-mbars .mrow { display: grid; grid-template-columns: 118px 1fr 46px; gap: 6px; align-items: center; margin: 4px 0 }
+  .ts-mbars .mtrack { height: 12px; background: var(--panel-2, #2a2f3e); border-radius: 6px; overflow: hidden }
+  .ts-mbars .mfill { height: 100%; border-radius: 6px }
 </style>
 </head>
 <body>
@@ -199,6 +215,8 @@
       <canvas id="chartMap" class="ts-chart" width="600" height="150"></canvas>
       <div class="ts-chart-title">Precision / Recall</div>
       <canvas id="chartPR" class="ts-chart" width="600" height="150"></canvas>
+      <div class="ts-chart-title">Accuracy / F1-score (P·R asosida, har epoch)</div>
+      <canvas id="chartAF" class="ts-chart" width="600" height="150"></canvas>
     </div>
 
     <div class="ts-section">
@@ -212,6 +230,42 @@
         <label>Run</label>
         <select id="resultRunSel"><option value="">— tugagan run tanlang —</option></select>
       </div>
+
+      <!-- Yakuniy metrikalar (accuracy) -->
+      <div id="resultSummary" class="ts-metric-cards"></div>
+
+      <!-- To'liq o'qitish parametrlari -->
+      <div id="resultParams"></div>
+
+      <!-- Tanlangan run grafiklari: loss / accuracy / precision-recall -->
+      <div class="ts-chart-title">📉 Loss — train vs val (box+cls+dfl)</div>
+      <canvas id="chartLossR" class="ts-chart" width="600" height="140"></canvas>
+      <div class="ts-chart-title">🎯 Aniqlik — mAP@50 / mAP@50-95</div>
+      <canvas id="chartMapR" class="ts-chart" width="600" height="140"></canvas>
+      <div class="ts-chart-title">📈 Precision / Recall</div>
+      <canvas id="chartPRR" class="ts-chart" width="600" height="140"></canvas>
+      <div class="ts-chart-title">🧮 Accuracy / F1-score (P·R asosida, har epoch)</div>
+      <canvas id="chartAFR" class="ts-chart" width="600" height="140"></canvas>
+
+      <!-- Rasm-darajali klinik metrikalar (Sensitivity/Specificity uchun TN kerak —
+           u faqat rasm darajasida mavjud: lezyonsiz rasm bo'sh chiqsa = TN) -->
+      <div class="ts-chart-title">🩺 Klinik metrikalar — rasm darajasida (val to'plam)</div>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:6px 0">
+        <label style="font-size:12px;color:var(--muted)">Conf chegara</label>
+        <select id="evalConf" style="background:var(--panel-2);color:var(--text);border:1px solid var(--border);border-radius:3px;padding:3px 6px;font-size:12px">
+          <option value="0.10">0.10</option>
+          <option value="0.25" selected>0.25</option>
+          <option value="0.40">0.40</option>
+          <option value="0.50">0.50</option>
+        </select>
+        <button class="ts-btn" id="evalBtn" style="font-size:12px">🧪 Hisoblash (val)</button>
+        <span class="ts-status" id="evalStatus"></span>
+      </div>
+      <div id="evalCards" class="ts-metric-cards"></div>
+      <div id="evalDetail" style="display:flex;gap:14px;flex-wrap:wrap;align-items:flex-start"></div>
+
+      <!-- Grafik rasmlar: ROC/PR egri, confusion matrix, F1/P/R egri -->
+      <div class="ts-chart-title">🖼 Baholash grafiklari (PR·F1·P·R egri, confusion matrix)</div>
       <div id="resultBtns" style="display:flex;gap:6px;flex-wrap:wrap;margin:8px 0"></div>
       <div id="resultImgWrap" style="text-align:center;min-height:40px"></div>
       <div class="ts-chart-title">Namuna bashoratlar (test rasmlarida bbox'lar)</div>

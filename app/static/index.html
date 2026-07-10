@@ -15,6 +15,7 @@
   <button class="mobile-toggle" id="mobileMetaBtn" title="O'ng panel">📋</button>
   <div class="user-bar" id="userBar">
     <span id="userInfo" hidden></span>
+    <a id="aiCountBadge" href="/api/ai_report" target="_blank" rel="noopener" title="AI annotatsiya ma'lumotnomasi" hidden style="background:linear-gradient(135deg,#0ea5e9,#2563eb);color:#fff;padding:4px 11px;border-radius:12px;font-size:12px;font-weight:600;text-decoration:none;display:inline-flex;align-items:center;gap:5px">🩻 AI <b id="aiCountN" style="font-variant-numeric:tabular-nums">…</b></a>
     <span class="bell-wrap" id="bellWrap" hidden>
       <button id="bellBtn" title="Bildirishnomalar">🔔<span class="bell-badge" id="bellBadge" hidden>0</span></button>
       <div class="bell-dropdown" id="bellDropdown" hidden></div>
@@ -36,6 +37,21 @@
     <button id="loginBtn" hidden>Kirish</button>
   </div>
 </header>
+<script>
+/* Header AI-annotatsiya soni badge'i — faqat son, ma'lumotnomага havola */
+(function(){
+  var TK='mamograf_jwt';
+  function upd(){
+    var b=document.getElementById('aiCountBadge'); if(!b)return;
+    var t=localStorage.getItem(TK); if(!t){b.hidden=true;return;}
+    fetch('/api/ai_annotations_data?_='+Date.now(),{cache:'no-store',headers:{'Authorization':'Bearer '+t}})
+      .then(function(r){return r.ok?r.json():null;})
+      .then(function(d){ if(d){document.getElementById('aiCountN').textContent=(d.total_images||0).toLocaleString('en-US');b.hidden=false;} })
+      .catch(function(){});
+  }
+  upd(); setInterval(upd,30000);
+})();
+</script>
 
 <!-- Modellar dashboard'i -->
 <div class="modal" id="modelMgrModal" hidden>

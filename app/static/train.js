@@ -120,6 +120,7 @@ async function loadRuns() {
       }
     }
     resumeSel.value = cur;
+    window._allRuns = runs;
     populateRunSelects(runs);
   } catch (e) {
     div.textContent = 'Xato: ' + e.message;
@@ -169,10 +170,92 @@ async function showResultPlot(runId, filename) {
     wrap.appendChild(img);
   } catch (e) { wrap.textContent = 'Xato: ' + e.message; }
 }
+// Metrika ustun nomlari ultralytics versiyasiga qarab farq qiladi
+function _m(row, keys) { return _col(row, keys); }
+const _MAP50 = ['metrics/mAP50(B)', 'metrics/mAP_0.5'];
+const _MAP95 = ['metrics/mAP50-95(B)', 'metrics/mAP_0.5:0.95'];
+const _PREC = ['metrics/precision(B)', 'metrics/precision'];
+const _REC = ['metrics/recall(B)', 'metrics/recall'];
+
+// P va R'dan hosilaviy metrikalar (har epoch):
+//   F1 = 2PR/(P+R) — garmonik o'rtacha
+//   Accuracy(det) = TP/(TP+FP+FN) = PR/(P+R−PR) — detektsiyada TN bo'lmagani
+//   uchun qabul qilingan ko'rinish (aniq, P va R ta'rifidan kelib chiqadi)
+function f1FromPR(p, r) {
+  if (p == null || r == null || (p + r) <= 0) return null;
+  return 2 * p * r / (p + r);
+}
+function accFromPR(p, r) {
+  if (p == null || r == null) return null;
+  const d = p + r - p * r;
+  return d > 0 ? (p * r) / d : null;
+}
+
+function renderResultSummary(run, rows) {
+  const box = $('resultSummary');
+  if (!box) return;
+  // eng yaxshi epoch — mAP50 bo'yicha; bo'lmasa oxirgi qatordan / last_metrics'dan
+  let best = null, bestEp = null;
+  rows.forEach((r, i) => {
+    const v = _m(r, _MAP50);
+    if (v != null && (best == null || v > _m(best, _MAP50))) { best = r; bestEp = _m(r, ['epoch']) || (i + 1); }
+  });
+  const src = best || (rows.length ? rows[rows.length - 1] : null) || run.last_metrics || {};
+  const card = (label, val, color) => {
+    const s = (val == null || val === '' || isNaN(val)) ? '—' : Number(val).toFixed(3);
+    return `<div class="ts-mcard"><div class="v" style="color:${color}">${s}</div><div class="l">${label}</div></div>`;
+  };
+  const epTot = rows.length || run.epochs_done || (run.params || {}).epochs || '—';
+  const p = _m(src, _PREC), r = _m(src, _REC);
+  box.innerHTML =
+    card('mAP@50', _m(src, _MAP50), '#22c55e') +
+    card('mAP@50-95', _m(src, _MAP95), '#a78bfa') +
+    card('Precision (aniqlik)', p, '#38bdf8') +
+    card('Recall / Sensitivity', r, '#f472b6') +
+    card('F1-score', f1FromPR(p, r), '#fb923c') +
+    card('Accuracy (det.)', accFromPR(p, r), '#34d399') +
+    `<div class="ts-mcard"><div class="v" style="color:#eab308">${epTot}</div><div class="l">Epoch${bestEp ? ' · eng yaxshi #' + Math.round(bestEp) : ''}</div></div>`;
+}
+
+const _PARAM_LABELS = [
+  ['base_model', 'Base model (arxitektura)'], ['dataset_name', 'Dataset'], ['epochs', 'Epochs (davrlar)'],
+  ['batch', 'Batch size'], ['imgsz', 'Image size (px)'], ['optimizer', 'Optimizer'],
+  ['pretrained', 'Pretrained (tayyor og\'irliklar)'], ['device', 'Device'],
+  ['lr0', 'lr0 (boshlang\'ich LR)'], ['lrf', 'lrf (yakuniy ×lr0)'], ['momentum', 'Momentum'],
+  ['weight_decay', 'Weight decay'], ['warmup_epochs', 'Warmup epochs'], ['cos_lr', 'Cosine LR'],
+  ['patience', 'Patience (early-stop)'], ['seed', 'Seed'],
+  ['hsv_h', 'Augment: HSV-Hue'], ['hsv_s', 'Augment: HSV-Sat'], ['hsv_v', 'Augment: HSV-Val'],
+  ['fliplr', 'Augment: Flip LR'], ['flipud', 'Augment: Flip UD'], ['scale', 'Augment: Scale'],
+  ['mosaic', 'Augment: Mosaic'], ['mixup', 'Augment: MixUp'],
+  ['workers', 'Workers'], ['cache', 'Cache'], ['deploy_after', 'Avto-deploy'],
+  ['resume', 'Resume'], ['project_name', 'Model nomi'],
+];
+function renderResultParams(params) {
+  const box = $('resultParams');
+  if (!box) return;
+  const fmt = (v) => (v === true ? 'Ha ✓' : v === false ? 'Yo\'q' : (v === null || v === '' ? '—' : v));
+  const rows = _PARAM_LABELS
+    .filter(([k]) => params[k] !== undefined && params[k] !== null && params[k] !== '')
+    .map(([k, lab]) => `<tr><td>${lab}</td><td><code>${fmt(params[k])}</code></td></tr>`).join('');
+  box.innerHTML = rows
+    ? `<details open><summary>⚙️ O'qitish parametrlari (barchasi)</summary><table class="ts-params">${rows}</table></details>`
+    : '';
+}
+
 async function loadResults(runId) {
   const btns = $('resultBtns'), preds = $('resultPreds'), wrap = $('resultImgWrap');
   btns.innerHTML = ''; preds.innerHTML = ''; wrap.innerHTML = '';
+  const sum = $('resultSummary'), par = $('resultParams');
+  if (sum) sum.innerHTML = ''; if (par) par.innerHTML = '';
+  drawAllCharts([], 'R');
+  resetEvalPanel();
   if (!runId) return;
+  loadEval(runId); // saqlangan rasm-darajali baholash bo'lsa ko'rsatamiz
+  // Yakuniy metrikalar + parametrlar + grafiklar (tanlangan run bo'yicha)
+  const run = (window._allRuns || []).find(r => r.run_id === runId) || {};
+  const rows = await fetchAndDrawMetrics(runId, 'R');
+  renderResultSummary(run, rows);
+  renderResultParams(run.params || {});
   try {
     const j = await apiJson(`/api/training/plots/${encodeURIComponent(runId)}`);
     if (!(j.plots || []).length) { btns.textContent = "Grafiklar yo'q (run hali tugamagan bo'lishi mumkin)"; }
@@ -198,6 +281,98 @@ async function loadResults(runId) {
       } catch (e) { /* jim */ }
     }
   } catch (e) { btns.textContent = 'Xato: ' + e.message; }
+}
+
+// ===== Rasm-darajali klinik baholash (Accuracy/Sensitivity/Specificity/F1) =====
+let _evalPoll = null;
+
+function resetEvalPanel() {
+  if (_evalPoll) { clearInterval(_evalPoll); _evalPoll = null; }
+  $('evalCards').innerHTML = '';
+  $('evalDetail').innerHTML = '';
+  $('evalStatus').textContent = '';
+}
+
+function renderEval(res) {
+  const pct = (v) => (v == null ? '—' : (v * 100).toFixed(1) + '%');
+  const card = (label, val, color) =>
+    `<div class="ts-mcard"><div class="v" style="color:${color}">${pct(val)}</div><div class="l">${label}</div></div>`;
+  $('evalCards').innerHTML =
+    card('Accuracy', res.accuracy, '#34d399') +
+    card('Sensitivity (Recall)', res.sensitivity, '#f472b6') +
+    card('Specificity', res.specificity, '#eab308') +
+    card('Precision', res.precision, '#38bdf8') +
+    card('F1-score', res.f1, '#fb923c');
+  // 2×2 confusion matrix + gorizontal barlar
+  const bars = [
+    ['Accuracy', res.accuracy, '#34d399'],
+    ['Sensitivity', res.sensitivity, '#f472b6'],
+    ['Specificity', res.specificity, '#eab308'],
+    ['Precision', res.precision, '#38bdf8'],
+    ['F1-score', res.f1, '#fb923c'],
+  ].map(([l, v, c]) => `
+    <div class="mrow"><span>${l}</span>
+      <span class="mtrack"><span class="mfill" style="width:${v == null ? 0 : Math.round(v * 100)}%;background:${c}"></span></span>
+      <span>${pct(v)}</span></div>`).join('');
+  const note = (res.specificity == null && (res.tn + res.fp) === 0)
+    ? `<div class="ts-hint" style="margin-left:0">⚠ Val to'plamida lezyonsiz (sog'lom) rasm yo'q — Specificity hisoblab bo'lmaydi.</div>` : '';
+  $('evalDetail').innerHTML = `
+    <table class="ts-cm">
+      <tr><th></th><th>Bashorat: lezyon bor</th><th>Bashorat: toza</th></tr>
+      <tr><th>Haqiqat: lezyon bor</th><td class="good">TP ${res.tp}</td><td class="bad">FN ${res.fn}</td></tr>
+      <tr><th>Haqiqat: toza</th><td class="bad">FP ${res.fp}</td><td class="good">TN ${res.tn}</td></tr>
+    </table>
+    <div class="ts-mbars">${bars}
+      <div class="ts-hint" style="margin-left:0">${res.images} ta val rasm · conf=${res.conf}${res.skipped ? ' · ' + res.skipped + ' o\'tkazildi' : ''}</div>
+      ${note}
+    </div>`;
+}
+
+async function loadEval(runId) {
+  try {
+    const j = await apiJson('/api/training/eval/' + encodeURIComponent(runId));
+    if (j.status === 'done' && j.result) renderEval(j.result);
+    else if (j.status === 'running') watchEval(runId);
+  } catch (e) { /* jim */ }
+}
+
+function watchEval(runId) {
+  if (_evalPoll) clearInterval(_evalPoll);
+  $('evalBtn').disabled = true;
+  _evalPoll = setInterval(async () => {
+    try {
+      const j = await apiJson('/api/training/eval/' + encodeURIComponent(runId));
+      if (j.status === 'running') {
+        $('evalStatus').textContent = `⏳ ${j.done || 0}/${j.total || '?'} rasm baholandi…`;
+      } else {
+        clearInterval(_evalPoll); _evalPoll = null;
+        $('evalBtn').disabled = false;
+        if (j.status === 'done' && j.result) {
+          $('evalStatus').textContent = '✓ tayyor';
+          renderEval(j.result);
+        } else if (j.status === 'failed') {
+          $('evalStatus').innerHTML = `<span style="color:#ef4444">Xato: ${j.error || ''}</span>`;
+        }
+      }
+    } catch (e) {
+      clearInterval(_evalPoll); _evalPoll = null;
+      $('evalBtn').disabled = false;
+      $('evalStatus').textContent = 'Status xato: ' + e.message;
+    }
+  }, 2500);
+}
+
+async function startEval() {
+  const runId = $('resultRunSel').value;
+  if (!runId) { $('evalStatus').textContent = 'Avval run tanlang'; return; }
+  const conf = $('evalConf').value || '0.25';
+  $('evalStatus').textContent = 'boshlanyapti…';
+  try {
+    await apiJson('/api/training/eval/' + encodeURIComponent(runId) + '?conf=' + conf, { method: 'POST' });
+    watchEval(runId);
+  } catch (e) {
+    $('evalStatus').innerHTML = `<span style="color:#ef4444">Xato: ${e.message}</span>`;
+  }
 }
 
 // ===== Eksport (ONNX / TensorRT / OpenVINO) =====
@@ -255,9 +430,14 @@ async function runCompare() {
   try {
     const j = await apiJson('/api/training/compare?runs=' + encodeURIComponent(a + ',' + b));
     const rs = j.runs || [];
+    rs.forEach(r => {
+      if (!r) return;
+      r.F1 = f1FromPR(r.precision, r.recall);
+      r.accuracy = accFromPR(r.precision, r.recall);
+    });
     const num = (r, k) => (r && r[k] != null ? Number(r[k]).toFixed(3) : '-');
     const bar = (v) => { const px = Math.round((v || 0) * 80); return `<span style="display:inline-block;height:6px;width:${px}px;background:#4a90e2;border-radius:3px;vertical-align:middle;margin-left:4px"></span>`; };
-    const rows = ['mAP50', 'mAP50_95', 'precision', 'recall'].map(k => {
+    const rows = ['mAP50', 'mAP50_95', 'precision', 'recall', 'F1', 'accuracy'].map(k => {
       const va = rs[0] ? rs[0][k] : null, vb = rs[1] ? rs[1][k] : null;
       const win = (va != null && vb != null) ? (va > vb ? '🅐' : va < vb ? '🅑' : '=') : '';
       return `<tr><td>${k}</td><td>${num(rs[0], k)}${bar(va)}</td><td>${num(rs[1], k)}${bar(vb)}</td><td>${win}</td></tr>`;
@@ -439,7 +619,7 @@ function drawChart(canvasId, series) {
     lx += 12 + ctx.measureText(s.label).width + 14;
   });
 }
-function drawAllCharts(rows) {
+function drawAllCharts(rows, sfx = '') {
   const ep = r => { const e = _col(r, ['epoch']); return e == null ? 0 : e; };
   const sumLoss = (r, pfx) => {
     const v = [`${pfx}/box_loss`, `${pfx}/cls_loss`, `${pfx}/dfl_loss`].map(k => _col(r, [k])).filter(x => x != null);
@@ -448,24 +628,34 @@ function drawAllCharts(rows) {
   const pick = (key) => rows.map(r => { const y = _col(r, key); return y == null ? null : { x: ep(r), y }; }).filter(Boolean);
   const lossTr = rows.map(r => { const y = sumLoss(r, 'train'); return y == null ? null : { x: ep(r), y }; }).filter(Boolean);
   const lossVal = rows.map(r => { const y = sumLoss(r, 'val'); return y == null ? null : { x: ep(r), y }; }).filter(Boolean);
-  drawChart('chartLoss', [
+  drawChart('chartLoss' + sfx, [
     { label: 'train', color: '#4a90e2', data: lossTr },
     { label: 'val', color: '#ff8c42', data: lossVal },
   ]);
-  drawChart('chartMap', [
+  drawChart('chartMap' + sfx, [
     { label: 'mAP@50', color: '#22c55e', data: pick(['metrics/mAP50(B)', 'metrics/mAP_0.5']) },
     { label: 'mAP@50-95', color: '#a78bfa', data: pick(['metrics/mAP50-95(B)', 'metrics/mAP_0.5:0.95']) },
   ]);
-  drawChart('chartPR', [
+  drawChart('chartPR' + sfx, [
     { label: 'precision', color: '#38bdf8', data: pick(['metrics/precision(B)', 'metrics/precision']) },
     { label: 'recall', color: '#f472b6', data: pick(['metrics/recall(B)', 'metrics/recall']) },
   ]);
+  // Hosilaviy: F1 va Accuracy(det) — P/R'dan har epoch uchun
+  const derive = (fn) => rows.map(r => {
+    const y = fn(_col(r, _PREC), _col(r, _REC));
+    return y == null ? null : { x: ep(r), y };
+  }).filter(Boolean);
+  drawChart('chartAF' + sfx, [
+    { label: 'F1', color: '#fb923c', data: derive(f1FromPR) },
+    { label: 'accuracy', color: '#34d399', data: derive(accFromPR) },
+  ]);
 }
-async function fetchAndDrawMetrics(runId) {
+async function fetchAndDrawMetrics(runId, sfx = '') {
   try {
     const j = await apiJson(`/api/training/metrics/${runId}`);
-    drawAllCharts(j.rows || []);
-  } catch (e) { /* jim */ }
+    drawAllCharts(j.rows || [], sfx);
+    return j.rows || [];
+  } catch (e) { return []; }
 }
 
 // ---------- GPU monitor ----------
@@ -596,6 +786,7 @@ $('dataYamlPath').addEventListener('change', validateDataset);
 ['imgsz', 'batch', 'device'].forEach(id => $(id).addEventListener('change', estimateVram));
 $('baseModelSel').addEventListener('change', estimateVram);
 $('resultRunSel').addEventListener('change', () => loadResults($('resultRunSel').value));
+$('evalBtn').addEventListener('click', startEval);
 $('exportOnnx').addEventListener('click', () => startExport('onnx'));
 $('exportTrt').addEventListener('click', () => startExport('tensorrt'));
 $('exportVino').addEventListener('click', () => startExport('openvino'));

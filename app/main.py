@@ -1579,6 +1579,159 @@ def training_compare(runs: str, _user: dict = Depends(auth_mod.require_user)):
     return {"runs": out}
 
 
+# --------------------------------------------------------------------------- #
+# Rasm-darajali klinik baholash: Accuracy / Sensitivity / Specificity / F1    #
+# --------------------------------------------------------------------------- #
+# Obyekt-detektsiyada TN (true negative) box darajasida mavjud emas, shu bois
+# Specificity faqat RASM darajasida hisoblanadi: lezyonsiz rasm modelda ham
+# bo'sh chiqsa — TN. Bu mammografiya CAD adabiyotidagi standart yondashuv.
+EVAL_JOBS: dict = {}
+
+
+def _yolo_label_path(img: Path) -> Path:
+    """images/... yo'lidan mos labels/...txt yo'lini yasaydi (YOLO strukturasi)."""
+    parts = list(img.parts)
+    for i in range(len(parts) - 1, -1, -1):
+        if parts[i] == "images":
+            parts[i] = "labels"
+            break
+    return Path(*parts).with_suffix(".txt")
+
+
+def _eval_val_images(data_yaml: Path) -> list[Path]:
+    import yaml as _yaml
+    cfg = _yaml.safe_load(data_yaml.read_text(encoding="utf-8")) or {}
+    root = Path(str(cfg.get("path") or "."))
+    if not root.is_absolute():
+        root = (data_yaml.parent / root).resolve()
+    val = cfg.get("val") or "images/val"
+    vals = val if isinstance(val, list) else [val]
+    exts = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff"}
+    imgs: list[Path] = []
+    for v in vals:
+        vd = Path(str(v))
+        if not vd.is_absolute():
+            vd = root / vd
+        if vd.is_dir():
+            imgs.extend(p for p in sorted(vd.rglob("*")) if p.suffix.lower() in exts)
+    return imgs
+
+
+def _run_image_eval(run_id: str, conf: float) -> None:
+    state = EVAL_JOBS[run_id]
+    try:
+        run_state = TRAINING_RUNS.get(run_id) or {}
+        params = run_state.get("params", {})
+        proj = BASE_DIR / "training_runs" / run_id
+        # Model: deploy qilingan .pt yoki run papkasidagi best.pt
+        model_path = run_state.get("best_pt") or run_state.get("model_deployed")
+        if not (model_path and Path(model_path).exists()):
+            bp = next((p for p in proj.rglob("best.pt") if p.is_file()), None)
+            model_path = str(bp) if bp else None
+        if not model_path:
+            raise RuntimeError("model topilmadi (best.pt yuklab olinmagan / deploy qilinmagan)")
+        data_yaml = Path(str(params.get("data_yaml") or ""))
+        if not data_yaml.exists():
+            raise RuntimeError(f"data.yaml topilmadi: {data_yaml}")
+        imgs = _eval_val_images(data_yaml)
+        if not imgs:
+            raise RuntimeError("val to'plamida rasm topilmadi")
+        state["total"] = len(imgs)
+        from ultralytics import YOLO
+        model = YOLO(model_path)
+        imgsz = int(params.get("imgsz") or 1024)
+        tp = fp = tn = fn = 0
+        for i, im in enumerate(imgs):
+            if state.get("_cancel"):
+                raise RuntimeError("foydalanuvchi bekor qildi")
+            lbl = _yolo_label_path(im)
+            try:
+                gt_pos = lbl.exists() and any(
+                    ln.strip() for ln in lbl.read_text(encoding="utf-8", errors="replace").splitlines())
+            except Exception:
+                gt_pos = False
+            try:
+                r = model.predict(str(im), imgsz=imgsz, conf=conf, verbose=False)
+                pred_pos = bool(len(r[0].boxes))
+            except Exception:
+                # o'qib bo'lmaydigan rasm — tashlab ketamiz
+                state["skipped"] = state.get("skipped", 0) + 1
+                state["done"] = i + 1
+                continue
+            if gt_pos and pred_pos:
+                tp += 1
+            elif gt_pos:
+                fn += 1
+            elif pred_pos:
+                fp += 1
+            else:
+                tn += 1
+            state.update({"done": i + 1, "tp": tp, "fp": fp, "tn": tn, "fn": fn})
+
+        def sdiv(a: float, b: float):
+            return round(a / b, 4) if b else None
+
+        result = {
+            "run_id": run_id, "conf": conf, "imgsz": imgsz,
+            "images": len(imgs), "skipped": state.get("skipped", 0),
+            "tp": tp, "fp": fp, "tn": tn, "fn": fn,
+            "accuracy": sdiv(tp + tn, tp + tn + fp + fn),
+            "sensitivity": sdiv(tp, tp + fn),          # = Recall (rasm darajasida)
+            "specificity": sdiv(tn, tn + fp),
+            "precision": sdiv(tp, tp + fp),
+            "f1": sdiv(2 * tp, 2 * tp + fp + fn),
+            "finished_at": datetime.now(timezone.utc).isoformat(),
+        }
+        try:
+            proj.mkdir(parents=True, exist_ok=True)
+            (proj / "eval_image_level.json").write_text(
+                json.dumps(result, ensure_ascii=False, indent=1), encoding="utf-8")
+        except Exception:
+            pass
+        state["status"] = "done"
+        state["result"] = result
+    except Exception as e:  # noqa: BLE001
+        state["status"] = "failed"
+        state["error"] = f"{type(e).__name__}: {e}"
+    EVAL_JOBS[run_id] = state
+
+
+@app.post("/api/training/eval/{run_id}")
+def training_eval_start(run_id: str, conf: float = 0.25,
+                        _user: dict = Depends(auth_mod.require_user)):
+    """Val to'plamda rasm-darajali baholashni (fonda) boshlaydi."""
+    safe = re.sub(r"[^A-Za-z0-9_.-]", "", run_id)
+    if safe not in TRAINING_RUNS:
+        raise HTTPException(404, f"Run topilmadi: {safe}")
+    cur = EVAL_JOBS.get(safe)
+    if cur and cur.get("status") == "running":
+        raise HTTPException(409, "Baholash allaqachon ketmoqda")
+    conf = min(max(float(conf), 0.01), 0.95)
+    EVAL_JOBS[safe] = {
+        "status": "running", "conf": conf, "done": 0, "total": 0,
+        "started_at": datetime.now(timezone.utc).isoformat(),
+    }
+    threading.Thread(target=_run_image_eval, args=(safe, conf), daemon=True).start()
+    return {"run_id": safe, "status": "running"}
+
+
+@app.get("/api/training/eval/{run_id}")
+def training_eval_status(run_id: str, _user: dict = Depends(auth_mod.require_user)):
+    """Baholash holati; tugagan bo'lsa natija (diskdan ham o'qiydi)."""
+    safe = re.sub(r"[^A-Za-z0-9_.-]", "", run_id)
+    state = EVAL_JOBS.get(safe)
+    if state:
+        out = {k: v for k, v in state.items() if not k.startswith("_")}
+        return {"run_id": safe, **out}
+    f = BASE_DIR / "training_runs" / safe / "eval_image_level.json"
+    if f.exists():
+        try:
+            return {"run_id": safe, "status": "done", "result": json.loads(f.read_text(encoding="utf-8"))}
+        except Exception:
+            pass
+    return {"run_id": safe, "status": "none"}
+
+
 @app.get("/api/training/validate")
 def training_validate(
     yaml_path: str = Query(..., alias="yaml"),
