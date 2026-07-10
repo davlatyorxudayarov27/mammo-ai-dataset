@@ -35,8 +35,9 @@ BODY = {
         ],
         "m21":
             "Первый поток — детектор YOLO11: он выдаёт рамку $B$ и уверенность класса $c_p$. "
-            "Второй поток — `boolfs`: из каждой ROI извлекаются 38 гистограммных/GLCM/градиентных "
-            "признаков, $n'^{*} = 36$ из них отбираются по критерию булева программирования, и "
+            "Второй поток — `boolfs`: из каждой ROI извлекаются 38 признаков (8 статистик "
+            "интенсивности, 10 компонент LBP, 6 признаков формы, 12 показателей GLCM и 2 "
+            "градиентных), $n'^{*} = 36$ из них отбираются по критерию булева программирования, и "
             "применяется классификатор минимального расстояния. Отбор признаков и центроиды "
             "настраиваются **только на обучающей части**; оценочный набор не участвует в потоке "
             "ни в каком виде.",
@@ -286,8 +287,9 @@ BODY = {
         ],
         "m21":
             "The first stream is the YOLO11 detector: it yields a box $B$ and a class confidence "
-            "$c_p$. The second stream is `boolfs`: 38 histogram/GLCM/gradient features are "
-            "extracted from every ROI, $n'^{*} = 36$ of them are selected by the Boolean "
+            "$c_p$. The second stream is `boolfs`: 38 features are extracted from every ROI (8 "
+            "intensity statistics, 10 LBP components, 6 shape features, 12 GLCM descriptors and 2 "
+            "gradient features), $n'^{*} = 36$ of them are selected by the Boolean "
             "programming criterion, and a minimum-distance classifier is applied. Feature "
             "selection and the centroids are fitted **on the training partition only**; the "
             "evaluation set takes no part in the pipeline in any form.",

@@ -54,7 +54,7 @@ T = {
         "abs": "Bul dasturlash masalasi sifatida qo'yilgan belgi tanlash usuli (Xamdamov, 2017) "
                "mammografik qiziqish sohalari (ROI) uchun ilk marta ikki tartibga farq qiluvchi "
                "hajmdagi bazalarda — 519 va 13 968 ta ROI'da — qiyosiy o'rganildi. Har bir ROI'dan "
-               "$N = 38$ ta gistogramma, GLCM va gradient belgisi ajratildi; tanlov (3.2.2) "
+               "$N = 38$ ta intensivlik, LBP, shakl, GLCM va gradient belgisi ajratildi; tanlov (3.2.2) "
                "kriteriysi va $r_j = a_j / w_j$ ranjirlashi asosida amalga oshirildi. 300 tadan "
                "bootstrap takrorlash bilan Kuncheva tasodifga tuzatilgan indeksi, juftlik-o'rtacha "
                "Jaccard koeffitsienti va belgilarning o'rtacha o'rni $\\bar{r}_j \\pm \\sigma_j$ "
@@ -126,8 +126,8 @@ T = {
         "abs": "Метод отбора признаков, сформулированный как задача булева программирования "
                "(Хамдамов, 2017), впервые сопоставительно исследован на маммографических областях "
                "интереса (ROI) для двух баз, различающихся на два порядка по объёму, — 519 и 13 968 "
-               "ROI. Из каждой ROI извлекались $N = 38$ гистограммных, GLCM- и градиентных "
-               "признаков; отбор выполнялся по критерию (3.2.2) и ранжированию $r_j = a_j / w_j$. "
+               "ROI. Из каждой ROI извлекались $N = 38$ признаков интенсивности, LBP, формы, GLCM и "
+               "градиента; отбор выполнялся по критерию (3.2.2) и ранжированию $r_j = a_j / w_j$. "
                "По 300 бутстреп-повторениям измерялись индекс Кунчевой с поправкой на случайность, "
                "попарно усреднённый коэффициент Жаккара и средний ранг признака "
                "$\\bar{r}_j \\pm \\sigma_j$. Главный результат двухслойный: (i) процедура отбора "
@@ -197,8 +197,8 @@ T = {
         "abs": "Feature selection posed as a Boolean programming problem (Khamdamov, 2017) is, for "
                "the first time, studied comparatively on mammographic regions of interest (ROIs) "
                "across two databases differing by two orders of magnitude in size — 519 versus "
-               "13,968 ROIs. From each ROI, $N = 38$ histogram, GLCM and gradient features were "
-               "extracted; selection followed criterion (3.2.2) and the ranking "
+               "13,968 ROIs. From each ROI, $N = 38$ intensity, LBP, shape, GLCM and gradient features "
+               "were extracted; selection followed criterion (3.2.2) and the ranking "
                "$r_j = a_j / w_j$. Using 300 bootstrap replicates we measured the "
                "chance-corrected Kuncheva index, the pairwise-averaged Jaccard coefficient, and "
                "each feature's mean rank $\\bar{r}_j \\pm \\sigma_j$. The principal result has two "
@@ -303,14 +303,7 @@ BODY = {
             "Shu ziddiyatning izohi maqolaning asosiy hissasidir.",
 
         "m21":
-            "Har bir ROI $I(x, y)$ kul-rang tasvir sifatida qaraladi va undan $N = 38$ ta belgi "
-            "ajratiladi: 8 ta gistogramma statistikasi (o'rtacha, standart chetlanish, "
-            "assimetriya, ekssess, entropiya, energiya va ikkita kvantil), $d \\in \\{1, 3\\}$ "
-            "masofalar va to'rt yo'nalish uchun o'rtachalangan 24 ta GLCM ko'rsatkichi "
-            "(kontrast, dissimilyarlik, bir jinslilik, energiya, korrelyatsiya, ASM) hamda 6 ta "
-            "gradient belgisi (Sobel modulining o'rtachasi, standart chetlanishi, kvantillari). "
-            "Barcha belgilar $z$-normallashtiriladi; normallashtirish parametrlari faqat o'quv "
-            "qismidan hisoblanadi.",
+            "Har bir ROI $I(x, y)$ kul-rang tasvir sifatida qaraladi va undan $N = 38$ ta belgi ajratiladi: 8 ta intensivlik statistikasi (o'rtacha, standart chetlanish, mediana, assimetriya, ekssess, entropiya va ikkita kvantil $p_{10}$, $p_{90}$); 10 ta lokal binar naqsh (LBP) gistogrammasi komponenti; 6 ta shakl belgisi (yuza nisbati, ekssentrisitet, solidlik, to'ldirish, ixchamlik, tomonlar nisbati); to'rt yo'nalish bo'yicha o'rtachalangan, $d \\in \\{1, 3\\}$ masofalar uchun 12 ta GLCM ko'rsatkichi (kontrast, dissimilyarlik, bir jinslilik, energiya, korrelyatsiya, ASM); hamda 2 ta gradient belgisi (Sobel modulining o'rtachasi va standart chetlanishi). Barcha belgilar $z$-normallashtiriladi; normallashtirish parametrlari faqat o'quv qismidan hisoblanadi.",
 
         "m22_a":
             "$j$-belgi va $(k, l)$ sinflar jufti uchun sinflararo markazlar farqi $a_{j}$ va sinf "
@@ -513,9 +506,9 @@ def t1_rows(lang, art, small, stab):
                 "Selected cardinality $n'^{*}$", "Image size", "Bootstrap replicates"]}[lang]
     v = [(K.INT(stab["small"]["n_roi"], lang), K.INT(art["n_roi_train"], lang)),
          ("—", K.INT(art["n_roi_val"], lang)),
-         ("6", "8"), ("38", "38"),
+         ("8", "8"), ("38", "38"),
          (str(small["n_star"]), str(art["n_star"])),
-         ("640 × 640", "1280 × 1280"), ("300", "300")]
+         ("817 × 1024", "1021 × 1280"), ("300", "300")]
     return [[L[i], v[i][0], v[i][1]] for i in range(len(L))]
 
 

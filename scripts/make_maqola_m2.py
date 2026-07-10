@@ -368,7 +368,8 @@ BODY = {"uz": {
     ],
     "m21":
         "Birinchi oqim — YOLO11 detektori: u ramka $B$ va sinf ishonchi $c_p$ ni beradi. Ikkinchi "
-        "oqim — `boolfs`: har bir ROI'dan 38 ta gistogramma/GLCM/gradient belgisi ajratiladi, "
+        "oqim — `boolfs`: har bir ROI'dan 38 ta belgi ajratiladi (8 intensivlik statistikasi, "
+        "10 LBP komponenti, 6 shakl belgisi, 12 GLCM ko'rsatkichi va 2 gradient belgisi), "
         "$n'^{*} = 36$ tasi bul-dasturlash mezoni bo'yicha tanlanadi va minimal masofa "
         "klassifikatori qo'llanadi. Belgi tanlash va sentroidlar **faqat o'quv qismida** "
         "sozlangan; baholash to'plami butun oqimda hech qanday ko'rinishda ishtirok etmaydi.",

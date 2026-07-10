@@ -62,12 +62,16 @@ def emit(doc, h1, h2, para, lead, bullets, table, concl, img_fn):
               "savolga javob bermaydi. Shu sababli ikkinchi bosqich sifatida bulcha belgi "
               "tanlash mezoni va minimal masofa qoidasiga asoslangan tasniflagich taklif "
               "etiladi.")
-    para(doc, "Har bir ROI kesmasidan 38 ta radiomika belgisi ajratiladi: birinchi tartib "
-              "statistikalari (o'rtacha, dispersiya, assimetriya, ekstsess), gradient "
-              "xarakteristikalari (Sobel operatorining o'rtachasi va standart chetlanishi) hamda "
-              "ikki masofa (d = 1 va d = 3) uchun GLCM belgilari: kontrast, dissimilyarlik, bir "
-              "jinslilik, energiya, korrelyatsiya, entropiya. Belgilar o'qitish to'plami "
-              "statistikasi bo'yicha z-normallashtiriladi.")
+    para(doc, "Har bir ROI kesmasidan 38 ta radiomika belgisi ajratiladi: 8 ta intensivlik "
+              "statistikasi (o'rtacha, standart chetlanish, mediana, assimetriya, ekssess, "
+              "entropiya va ikkita kvantil), 10 ta lokal binar naqsh (LBP) gistogrammasi "
+              "komponenti, 6 ta shakl belgisi (yuza nisbati, ekssentrisitet, solidlik, "
+              "to'ldirish, ixchamlik, tomonlar nisbati), to'rt yo'nalish bo'yicha "
+              "o'rtachalangan va ikki masofa (d = 1 va d = 3) uchun hisoblangan 12 ta GLCM "
+              "ko'rsatkichi (kontrast, dissimilyarlik, bir jinslilik, energiya, korrelyatsiya, "
+              "ASM) hamda 2 ta gradient belgisi (Sobel operatorining o'rtachasi va standart "
+              "chetlanishi). Belgilar o'qitish to'plami statistikasi bo'yicha "
+              "z-normallashtiriladi.")
     para(doc, "Tadqiqotda sakkiz sinfli mammografiya bazasi ishlatildi: {n_tr} ta o'qitish va "
               "{n_val} ta tekshirish ROI'si (mos ravishda {img_tr} va {img_val} tasvirdan). "
               "Baza kuchli nomutanosib (2.5-jadval): limfa tugunlari ROI'larning katta qismini "

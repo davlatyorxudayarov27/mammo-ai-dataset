@@ -43,14 +43,7 @@ BODY = {
             "этого противоречия и составляет основной вклад статьи.",
 
         "m21":
-            "Каждая ROI рассматривается как полутоновое изображение $I(x, y)$, из которого "
-            "извлекаются $N = 38$ признаков: 8 гистограммных статистик (среднее, стандартное "
-            "отклонение, асимметрия, эксцесс, энтропия, энергия и два квантиля), 24 показателя "
-            "GLCM, усреднённых по четырём направлениям для расстояний $d \\in \\{1, 3\\}$ "
-            "(контраст, несходство, однородность, энергия, корреляция, ASM), а также 6 градиентных "
-            "признаков (среднее, стандартное отклонение и квантили модуля Собеля). Все признаки "
-            "подвергаются $z$-нормировке; параметры нормировки вычисляются только по обучающей "
-            "части.",
+            "Каждая ROI рассматривается как полутоновое изображение $I(x, y)$, из которого извлекаются $N = 38$ признаков: 8 статистик интенсивности (среднее, стандартное отклонение, медиана, асимметрия, эксцесс, энтропия и два квантиля $p_{10}$, $p_{90}$); 10 компонент гистограммы локальных бинарных шаблонов (LBP); 6 признаков формы (отношение площадей, эксцентриситет, солидность, заполнение, компактность, отношение сторон); 12 показателей GLCM, усреднённых по четырём направлениям для расстояний $d \\in \\{1, 3\\}$ (контраст, несходство, однородность, энергия, корреляция, ASM); а также 2 градиентных признака (среднее и стандартное отклонение модуля Собеля). Все признаки подвергаются $z$-нормировке; параметры нормировки вычисляются только по обучающей части.",
 
         "m22_a":
             "Для $j$-го признака и пары классов $(k, l)$ разность межклассовых центров $a_{j}$ и "
@@ -253,13 +246,7 @@ BODY = {
             "of this paper.",
 
         "m21":
-            "Each ROI is treated as a grayscale image $I(x, y)$ from which $N = 38$ features are "
-            "extracted: 8 histogram statistics (mean, standard deviation, skewness, kurtosis, "
-            "entropy, energy and two quantiles), 24 GLCM descriptors averaged over four directions "
-            "for distances $d \\in \\{1, 3\\}$ (contrast, dissimilarity, homogeneity, energy, "
-            "correlation, ASM), and 6 gradient features (mean, standard deviation and quantiles of "
-            "the Sobel magnitude). All features are $z$-normalised; the normalisation parameters "
-            "are computed from the training partition alone.",
+            "Each ROI is treated as a grayscale image $I(x, y)$ from which $N = 38$ features are extracted: 8 intensity statistics (mean, standard deviation, median, skewness, kurtosis, entropy and two quantiles $p_{10}$, $p_{90}$); 10 local binary pattern (LBP) histogram components; 6 shape features (area ratio, eccentricity, solidity, extent, compactness, aspect ratio); 12 GLCM descriptors averaged over four directions for distances $d \\in \\{1, 3\\}$ (contrast, dissimilarity, homogeneity, energy, correlation, ASM); and 2 gradient features (mean and standard deviation of the Sobel magnitude). All features are $z$-normalised; the normalisation parameters are computed from the training partition alone.",
 
         "m22_a":
             "For feature $j$ and the class pair $(k, l)$, the between-class centre difference "

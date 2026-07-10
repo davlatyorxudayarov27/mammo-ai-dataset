@@ -503,3 +503,37 @@ PYTHONPATH=/home/ai/.local/lib/python3.12/site-packages:$PWD/scripts \
 **Yakuniy holat:** 18 519 so'z · 168 OMML tenglama · 18 jadval · 111 rasm ·
 xom LaTeX 0 · OMML sxema xatosi 0 · bo'sh tenglama qutisi 0.
 Zaxira: `backups/MAMOGRAF_PhD_dissertatsiya_BEFORE_katta_baza_20260710.docx`.
+
+### Sessiya 10-v — 1-maqolaning to'liq raqamli auditi va belgilar tavsifidagi xato
+
+**Audit.** M1 maqolasidagi 38 ta raqamli da'vo `runs/` dagi JSON'lar bilan avtomatik
+solishtirildi (n′*, ROI sonlari, CI chegaralari, Spirmen ρ, kelishuv koeffitsientlari, Kuncheva
+va Jaccard qiymatlari, o'rtacha o'rinlar, Φ(1)/Φ(38), monotonlik, sinf nomutanosibligi).
+**Barchasi to'g'ri chiqdi — 0 xato.** Φ ning qat'iy monotonligi ham empirik tasdiqlandi.
+
+**Ammo raqamsiz tavsifda jiddiy xato topildi.** `boolfs.features.FEATURE_NAMES` bo'yicha
+haqiqiy tarkib:
+
+| Guruh | Soni |
+|---|---|
+| intensivlik (`int_*`) | 8 |
+| LBP (`lbp_u0..u9`) | **10** |
+| shakl (`shape_*`) | **6** |
+| GLCM (2 masofa × 6 xossa) | 12 |
+| gradient (`grad_sobel_*`) | 2 |
+| **jami** | **38** |
+
+Maqolalarda esa «8 gistogramma + 24 GLCM + 6 gradient» deb yozilgan edi: **LBP va shakl
+belgilari umuman eslatilmagan**, GLCM soni ikki barobar oshirilgan, gradient soni uch barobar.
+Xuddi shu kamchilik **eski boolfs bobida** (`dissertatsiya_bob_boolfs.py`) ham bor edi
+(u yerda GLCM xossalari ro'yxatida ASM o'rniga «entropiya» yozilgan).
+
+**Jadval-1 dagi ikki xato ham tuzatildi:** sinflar soni «6 / 8» → aslida ikkala baza ham
+8 sinfli; rasm o'lchami «640×640 / 1280×1280» → aslida **817×1024** va **1021×1280**
+(PIL bilan o'lchandi, namunada 100% bir xil).
+
+Tuzatildi: M1 §2.1 + annotatsiya (3 til), M2 §2.1 (3 til), `t1_rows`, eski dissertatsiya bobi.
+Oltala maqola va dissertatsiya qayta qurildi; xom LaTeX 0, OMML sxema xatosi 0, bo'sh quti 0.
+
+**Saboq:** raqamlar avtomatik tekshiriladi, **ta'riflar esa yo'q**. Metod bo'limidagi har bir
+«N ta shunday belgi» gapini kod bilan (`FEATURE_NAMES`) solishtirish shart.
