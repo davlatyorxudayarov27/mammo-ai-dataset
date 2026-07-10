@@ -100,3 +100,163 @@ Barcha o'zgarishlar **6 ta faylda** jamlangan. Eng to'liq, yangilangan nusxa: `~
 
 > ⚠️ Agar lokal kodingizni shu fayllarda **qo'lda** o'zgartirgan bo'lsangiz, ustiga yozishdan oldin
 > nusxa oling — aks holda o'sha o'zgarishlar yo'qoladi.
+
+---
+---
+
+# DAVOMI — 14-iyundan keyingi sessiyalar (2026-07-10 da yozildi)
+
+> Quyidagi bo'limlar 2026-07-10 kuni git tarixi, xotira yozuvlari va prod volume tahlili
+> asosida jamlab yozildi.
+
+---
+
+## 3-sessiya — 2026-06-18 (18-iyun)
+
+### 3.1. 🐞 Asboblarni to'liq tekshiruv — 4 ta xato tuzatildi
+- Ruler / Angle / Smart-click o'lchov asboblari ishlamasligi tuzatildi.
+- `renderAnnoList`/handles, avtomatik W/L (window/level), HEAD-probe, SEG eksport xatolari.
+- Commitlar: `afc9f65`, `c1d109e`.
+
+### 3.2. ✨ To'liq YOLO eksport
+- `/api/export?format=yolo` endi **to'liq, o'qitishga tayyor dataset** beradi (rasm + label + data.yaml).
+- Commit: `27ff63c`.
+
+### 3.3. 🔧 scripts/pull_from_aiscan.py
+- Serverdan annotatsiya + DICOM'larni lokal kompyuterga ko'chirish skripti. Commit: `2313133`.
+
+### 3.4. 📄 Loyiha hujjatlari
+- Ma'lumotnoma + taqdimot qo'shildi (`docs/`). Commit: `241f7c4`.
+
+---
+
+## 4-sessiya — 2026-06-21..22 (21-22 iyun)
+
+### 4.1. ✨ Radiomika benign/malignant klassifikatori
+- `scripts/train_radiomics_clf.py` + UI'da "🔬 Xavf tahlili" tugmasi; `requirements`ga scikit-learn.
+- Commitlar: `79aaff8`, `58f0375`.
+
+### 4.2. 🎨 UI ixchamlashtirish
+- Ortiqcha tugmalar menyuga yig'ildi, ishlash sohasi kengaytirildi. Commit: `7e976e3`.
+
+### 4.3. 🚀 CI/CD
+- GitHub push'da serverga avtomatik deploy (self-hosted runner + Docker). `CICD_SETUP.md`. Commit: `51af638`.
+
+### 4.4. 📋 Instrumentlar tekshiruvi
+- `INSTRUMENTLAR_TEKSHIRUVI_21-iyun.md` — barcha asboblar ro'yxat bilan tekshirildi.
+
+---
+
+## 5-sessiya — 2026-06-26..28 (26-28 iyun)
+
+### 5.1. ✨ Masofaviy GPU'da o'qitish (training)
+- Training endi GPU serverda (10.10.0.72, RTX 3090) bajariladi: `mamograf-train.service` (:8077).
+- Ilova `REMOTE_TRAIN_URL` + `app/remote_train.py` orqali proksi qiladi; `X-Train-Token` autentifikatsiya.
+- Commit: `cac319e`.
+
+### 5.2. ✨ Ollama "Hisobot" (lokal LLM)
+- Annotatsiya asosida bemor hisobotini lokal LLM yozadi: Ollama (10.10.0.72, qwen2.5:7b), `OLLAMA_HOST` env.
+- ⚠️ `report_findings.py` va `train_worker.py` prod volume'da yetishmayotgan edi — qo'shildi.
+
+### 5.3. 🔒 Brute-force himoyasi
+- Login lockout: 8 xato / 15 daqiqa + parol siyosati.
+- Eslatma: X-Forwarded-For spoof qilinishi mumkin (`forwarded-allow-ips *`), IP-limit yolg'iz yetarli emas.
+
+### 5.4. ✨ Landing sahifa
+- Ilova `/app` marshrutiga ko'chdi, `/` — tanishtiruv (landing) sahifa. Test moslandi (`812364c`).
+
+### 5.5. 🔧 Boshqa
+- `scripts/test_full_app.py` — butun ilova tugmalarini avtomatik tekshiruv (`881c8ed`).
+- `deploy_update.sh` — annotatsiyalarni saqlab xavfsiz yangilash (`939f21b`).
+- Fix: train.html vertikal skrol (`c136d84`); dataset tayyorlash lokal annotatsiyalarni ham oladi (`b776812`).
+
+---
+
+## 6-sessiya — 2026-06-29 (29-iyun)
+
+### 6.1. ✨ GPU'ga dataset oldindan yuklash
+- Dataset prepare-vaqtida GPU serverga yuklanadi (`/datasets` + `dataset_name`) → train tugmasi bosilganda darhol boshlanadi. Commit: `094853c`.
+
+### 6.2. 📄 PhD dissertatsiya generatori
+- `scripts/make_dissertatsiya_phd.py` — docx generator (muallif Turaqulov, rahbar Xamdamov).
+- Build **faqat konteynerda** (host'da pip yo'q). Zaxira: `MAMOGRAF_PhD_dissertatsiya_BACKUP_20260629.docx`.
+
+### 6.3. 📄 Annotatsiya-yig'ish maqolasi
+- `scripts/make_maqola_annotatsiya.py` — avtomatlashtirilgan annotatsiya yig'ish maqolasi (54 formula),
+  dissertatsiyaga bob sifatida ulangan. 2 yangi model: YOLO11-Small mAP@50 0.43, YOLO9-compact 0.32.
+
+---
+
+## 7-sessiya — 2026-07-02 (2-iyul)
+
+### 7.1. ✨ GMIC "Tashxis" paneli (benign/malignant)
+- NYU GMIC modeli vendor qilindi: `app/gmic/` + `/api/inference/classify` marshrut.
+- Out-of-box AUC 0.5 (domain shift) → MIL fine-tune bilan **AUC 0.725**.
+
+### 7.2. 🔒 Audit log + Savatcha (soft-delete)
+- Har bir harakat middleware orqali `audit_log` jadvaliga yoziladi.
+- 7 ta delete endpoint endi soft-delete: `trash` jadvali, fayllar `_trash/` papkaga.
+- Admin panelda "📋 Audit log" + "🗑 Savatcha" tablari. nan→None tuzatish.
+- Commit: `20ee2d9`.
+
+### 7.3. 🔧 Dockerfile.prod
+- CPU-only torch + `.dockerignore` — yengil, barqaror image. Commit: `70c0f41`.
+
+---
+
+## 8-sessiya — 2026-07-03..09 (iyul boshi) ⚠️ QISMAN COMMIT QILINMAGAN
+
+### 8.1. 🔒 Xavfsizlik auditi (5 loyiha bo'yicha, mamograf qismi)
+- **CRITICAL tuzatildi:** PHI (bemor ma'lumoti) `/api` marshrutlariga auth-guard (`_guard_ok`) +
+  HttpOnly cookie-auth (`auth_login`/`auth_logout` yangilandi).
+- Eksport yo'lini tekshirish: `_validate_export_dest` (path traversal himoyasi).
+- Sirlar 0600 fayllarda. **Bu tuzatishlar hozircha FAQAT prod volume'da!** (pastdagi 8.7 ga qarang)
+
+### 8.2. ✨ BOOLFS — bulcha belgilar usuli (Xamdamov 2017)
+- Bulcha (Boolean) belgi tanlash + minimal-masofa klassifikator — YOLO ustiga 2-bosqich.
+- YOLO ensemble sinf-aniqligi **0.737 → 0.853**.
+- Paket: `app/boolfs/` (7 modul: features, selector, criterion, classifier, pipeline, report) + `app/boolfs_api.py` + `app/static/boolfs.js`.
+- Train UI: `train.html`da binafsha `bf-*` blok (Model Studio ichida).
+- ⚠️ Bu kod **faqat prod volume'da edi** — 2026-07-10 da dev repo'ga qaytarib nusxalandi.
+- Hisobot: konteynerda `app/boolfs_runs/`.
+
+### 8.3. 📄 BOOLFS maqolalari
+- 2 ta maqola docx (nazariy + amaliy), `scripts/make_maqola_boolfs.py`; raqamlar JSON'dan avtomatik.
+
+### 8.4. ✨ 8-klassli detektor
+- `d_dataset_mamagrammav445` — 8-klass (BIRADS juftlik, skin/nipple yo'q).
+- GPU'ga to'g'ridan `X-Train-Token` bilan job yuborildi. YOLO11l mAP 0.417 (kichik datasetda small'dan o'zmadi).
+
+### 8.5. ✨ Training natijalarini baholash (COMMIT QILINMAGAN, dev'da)
+- `POST/GET /api/training/eval/{run_id}` — o'qitilgan modelni val-rasmlar ustida baholash (`main.py` +153 qator).
+- `train.js` (+207): natija xulosasi kartalari (mAP50, mAP50-95, precision, recall, F1), parametrlar ko'rinishi.
+- `train.html` (+54), `index.html` (+16), `app.js` (+5).
+- Bu o'zgarishlar prod'ga deploy qilingan (train.js/index.html prod bilan bir xil).
+
+### 8.6. ✨ Avtomatik annotatsiya (COMMIT QILINMAGAN)
+- `scripts/auto_annotate.py` + `app/static/auto_annotate.html` (2026-07-08) — avtomatlashtirilgan annotatsiya yig'ish.
+- `scripts/auto_backup.sh` — kunlik zaxira (cron 02:00): db + annotatsiya + labels, yakshanba to'liq (uploads bilan).
+
+### 8.7. ⚠️⚠️ MUHIM: DEV va PROD KOD AJRALIB KETGAN (2026-07-10 holati)
+Prod volume'dagi kod va `~/plan_project_new` dev nusxasi **ikki tomonlama** farq qiladi:
+
+| Qayerda | Nima bor (ikkinchisida YO'Q) |
+|---------|------------------------------|
+| **Faqat PROD** | Xavfsizlik tuzatishlari (`_guard_ok`, cookie-auth, logout, `_validate_export_dest`), `boolfs_api` ulanishi, `/server` va `/iqttalim` reverse-proxy marshrutlari, train.html'dagi bf-* blok |
+| **Faqat DEV** | AI annotatsiya rangi (`ai:*` → och yashil), admin nav (`_adminNav`), training eval (8.5) — oxirgisi prodga deploy qilingan |
+
+**Xavf:** `deploy_update.sh` / rsync dev→volume yo'nalishida ishlaydi — ehtiyotsiz deploy
+prod'dagi xavfsizlik tuzatishlarini O'CHIRIB yuboradi!
+**Chora (2026-07-10):** prod kodning to'liq snapshoti olindi →
+`backups/prod_code_snapshot_20260710.tar.gz` (276K, kod fayllari: *.py, static, boolfs, gmic/src, scripts).
+**Keyingi qadam:** prod'dagi main.py/app.js/train.html o'zgarishlarini dev'ga merge qilish kerak
+(shundan keyingina oddiy deploy xavfsiz bo'ladi).
+
+---
+
+## YANGILANGAN XULOSA (2026-07-10)
+
+- Git'dagi oxirgi commit: `70c0f41` (2026-07-02). 8-sessiya ishlari hali commit qilinmagan.
+- Eng to'liq **UI/train** kod: dev (`~/plan_project_new/app/`); eng to'liq **xavfsizlik/boolfs** kod: prod volume.
+- Prod kod snapshoti: `backups/prod_code_snapshot_20260710.tar.gz`.
+- Kunlik ma'lumot zaxirasi: `backups/auto/` (cron 02:00, `scripts/auto_backup.sh`).
