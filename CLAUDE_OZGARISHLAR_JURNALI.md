@@ -343,3 +343,18 @@ noaniqlik ko'rsatilmagan; α ansambl vazni **val to'plamda** tanlanardi (optimis
 yaroqsiz; ansambl foydasi sezgirlik va AUC da. Sarlavha ham shunga moslandi.
 Maqola 3 tilda qayta qurildi (13 OMML tenglama, 6 jadval, 5 rasm, ~2400-2850 so'z).
 Dissertatsiya "II bob (davomi)" ham to'liq yangilandi (2.5-2.10-jadval, 2.5-2.9-rasm).
+
+### 9.5. 🔧 Dissertatsiyadagi 80 ta xom LaTeX bo'lagi tuzatildi
+**Muammo (9.3 da qayd etilgan edi):** matn ichida `$\mathrm{softplus}$`, `$f_{deep}$`,
+`$F_v^{(s)} \in \mathbb{R}^{C_s \times H_s \times W_s}$` kabi bo'laklar xom LaTeX ko'rinishida
+ko'rinib turardi — `para()` satr-ichi matematikani render qilmasdi.
+
+**Yechim:** `scripts/omml_inline.py` — satr-ichi LaTeX → Word native OMML konvertori
+(yunon harflari, _ va ^ indekslar, {guruh}, \text/\mathrm/\texttt/\mathbf, \mathbb{R}→ℝ,
+\bar{x}→x̄, \times \dots \in \leq \geq, \{ \} qavslar; harf kursiv, son/operator tik).
+`para()`, `lead()`, `bullets()` endi `emit_rich()` orqali ishlaydi (`**qalin**` ham saqlanadi).
+
+**Natija:** xom `$...$` bo'laklar 80 → **0**; OMML tenglamalar 13 → **93** (13 display + 80 inline).
+Matnda birorta teskari chiziq qolmadi. Tekshiruv: pandoc docx→latex to'g'ri o'qidi
+(`F_{v}^{(s)} \in \mathbb{R}^{...}`, `y \leq k`, `(C_1,C_2,C_3)=(256,512,512)`).
+Zaxira: `backups/MAMOGRAF_PhD_dissertatsiya_BEFORE_inline_math_20260710.docx`.

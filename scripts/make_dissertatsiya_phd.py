@@ -27,6 +27,11 @@ OUT = ROOT / "MAMOGRAF_PhD_dissertatsiya.docx"
 
 ACCENT = RGBColor(0x14, 0x2C, 0x52)
 MUTED = RGBColor(0x55, 0x55, 0x55)
+import os as _os
+import sys as _sys
+_sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
+import omml_inline as _inline
+
 SECTIONS = []
 
 
@@ -124,12 +129,9 @@ def para(doc, t, just=True, bold=False, italic=False, muted=False, first_line=Tr
         p.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
     if first_line:
         p.paragraph_format.first_line_indent = Cm(1.0)
-    for i, seg in enumerate(t.split("**")):
-        r = p.add_run(seg)
-        r.bold = bold or (i % 2 == 1)
-        r.italic = italic
-        if muted:
-            r.font.color.rgb = MUTED
+    # `$...$` — Word native OMML (inline), `**...**` — qalin
+    _inline.emit_rich(p, t, bold_all=bold, italic=italic,
+                      color=MUTED if muted else None)
     return p
 
 
@@ -138,7 +140,7 @@ def lead(doc, label, text):
     p.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
     p.paragraph_format.first_line_indent = Cm(1.0)
     p.add_run(label + " ").bold = True
-    p.add_run(text)
+    _inline.emit_rich(p, text)
     return p
 
 
@@ -147,8 +149,7 @@ def bullets(doc, items, numbered=False):
     for it in items:
         p = doc.add_paragraph(style=style)
         p.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
-        for i, seg in enumerate(it.split("**")):
-            p.add_run(seg).bold = (i % 2 == 1)
+        _inline.emit_rich(p, it)
 
 
 def eq(doc, name, number=None, width=None):
