@@ -311,3 +311,35 @@ Endi dev → prod deploy xavfsiz (dev to'liq superset).
 > ko'rinib turibdi (`$\mathrm{softplus}$`, `$f_{deep}$`, `$F_v^{(s)}$` …) — `para()` satr ichidagi
 > matematikani render qilmaydi. Bu yangi bobga taalluqli emas (unda 0 ta). Tuzatish uchun satr ichi
 > matematikani OMML'ga o'tkazish kerak.
+
+### 9.4. 🔬 Maqola natijalari qayta hisoblandi — to'liq metrika + halol protokol
+**Muammo:** maqolada faqat P (aniqlik) bor edi, sezgirlik/o'ziga xoslik/AUC yo'q; grafiklarda
+noaniqlik ko'rsatilmagan; α ansambl vazni **val to'plamda** tanlanardi (optimistik siljish).
+
+**Qilingan ishlar:**
+- `scripts/exp12_dump_predictions.py` — 8 konfiguratsiya (val+train) uchun XOM bashoratlar
+  (y_true, yolo_vec, bool_vec, conf) `.npz` ga saqlanadi → metrikani YOLO'siz qayta hisoblash mumkin.
+- `scripts/metrics_lib.py` — aniqlik, muvozanatli aniqlik (= makro sezgirlik), o'ziga xoslik,
+  precision, F1, ROC-AUC (OvR makro/vaznli), MCC, Cohen κ + bootstrap CI va juftlashgan Δ testi.
+- `scripts/exp13_metrics.py` — **α* endi FAQAT train'da tanlanadi**, val — yakuniy baholash;
+  har metrika 95% CI (1000× bootstrap), Δ uchun p-qiymat.
+- `scripts/exp14_nsweep_ci.py` — n′ sweep; fold-std o'rniga **pooled CV + bootstrap CI**
+  (LOO fold'lari 1 namunali → fold aniqligi 0/1, std ≈0,37 sun'iy).
+- `scripts/maqola_figures.py` — 5 ta grafik: n′ CI tasmali, α (train tanlov / val baholash),
+  makro ROC, sinf kesimida sezgirlik, chalkashlik matritsasi.
+
+**Natijalar o'zgardi (halol protokolda):**
+- YOLO11l: aniqlik 0,800 → 0,810 (p = 0,868, AHAMIYATSIZ) — avvalgi "0,867" α ni val'da
+  tanlashdan kelib chiqqan siljish edi. Ammo makro sezgirlik 0,575 → 0,709 (p = 0,032) va
+  makro AUC 0,801 → 0,892.
+- YOLO11s: hamma mezon sezilarli — aniqlik 0,737 → 0,853 (p < 0,001), AUC 0,729 → 0,852,
+  κ 0,616 → 0,773.
+- YOLO11l-v2: faqat AUC sezilarli (0,759 → 0,793).
+- boolfs yolg'iz (GT ROI): aniqlik 0,628, AUC 0,889 → tartiblashda kuchli, qarorda zaif.
+- Yutuq kam uchraydigan sinflarda: kalsifikatsiya 0,84 → 0,97; assimetriya 0,25 → 0,75;
+  limfa tuguni 0,96 → 0,80 (almashuv).
+
+**Maqolaning yangi markaziy da'vosi:** nomutanosib bazada aniqlik yolg'iz mezon sifatida
+yaroqsiz; ansambl foydasi sezgirlik va AUC da. Sarlavha ham shunga moslandi.
+Maqola 3 tilda qayta qurildi (13 OMML tenglama, 6 jadval, 5 rasm, ~2400-2850 so'z).
+Dissertatsiya "II bob (davomi)" ham to'liq yangilandi (2.5-2.10-jadval, 2.5-2.9-rasm).
