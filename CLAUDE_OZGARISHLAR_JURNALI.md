@@ -358,3 +358,70 @@ ko'rinib turardi — `para()` satr-ichi matematikani render qilmasdi.
 Matnda birorta teskari chiziq qolmadi. Tekshiruv: pandoc docx→latex to'g'ri o'qidi
 (`F_{v}^{(s)} \in \mathbb{R}^{...}`, `y \leq k`, `(C_1,C_2,C_3)=(256,512,512)`).
 Zaxira: `backups/MAMOGRAF_PhD_dissertatsiya_BEFORE_inline_math_20260710.docx`.
+
+---
+
+## Sessiya 10 — Katta datasetda boolfs + ikkita yangi maqola (2026-07-10)
+
+### Vazifa
+`d_ai_8class_1280` datasetida (foydalanuvchi `d_aa_8clas_1280` deb yozgan, real nom boshqacha)
+Xamdamov usulini sinash va ansambl mavzusida **2 ta maqola × 3 til** yozish.
+
+### Eksperimentlar (`/home/ai/mamograf_yangilash_21-iyun/`)
+| Skript | Nima qiladi |
+|---|---|
+| `gpu_detect.py` | GPU'da (10.10.0.72) YOLO inferens; faqat xom detektsiyalar npz'ga (GPU'da skimage yo'q) |
+| `exp20_boolfs_big.py` | boolfs fit; belgi keshi; n′ sweep + pooled CV + bootstrap CI |
+| `exp21_match_big.py` | IoU≥0.3 greedy moslashtirish; har ROI uchun boolfs bahosi; `leaked` bayrog'i |
+| `exp22_metrics_big.py` | α* train'da; leakage'siz val'da to'liq metrika + juftlashgan Δ + p |
+| `exp23_stability_multi.py` | Kuncheva + Jaccard + o'rtacha o'rin, n′∈[3..36], IKKALA bazada |
+| `figures_big.py` | 9 rasm × 3 til → `doc_assets_big/{uz,ru,en}/` |
+
+**Dataset:** 4573 train / 798 val rasm → 13 968 / 2 359 GT ROI. Sinflar nomutanosib
+(limfa tuguni 9483 … arxitektura buzilishi 13).
+
+### Asosiy natijalar
+- **boolfs (katta baza):** n′* = 36, val acc 0,596, bacc 0,638 [0,606; 0,762], makro AUC 0,947, MCC 0,490.
+- **Barqarorlik ikki qatlamli** (1-maqolaning ilmiy hissasi):
+  - baza ICHIDA yuqori: Kuncheva ≥ 0,830 barcha n′ da (katta baza), n′=5 da 1,000;
+  - bazalar ORASIDA reyting boshi ko'chadi: Spirmen ρ = 0,937, ammo **top-3 kelishuvi 0,333**.
+    Kichik bazada 1-o'rin `glcm_d1_correlation`, kattada `grad_sobel_std` (1,0 ± 0,0).
+  - Jaccard n′=36 da 0,995 — tuzatilmagan o'lchov aldaydi (36/38 tanlansa har qanday
+    ikki to'plam ustma-ust tushadi). **Faqat Kuncheva'ga tayanish kerak.**
+- **MA'LUMOT SIZISHI topildi:** yangi val'ning 24 ta rasmi eski (445) bazaning train'ida.
+  `yolo11s_8class` va `trained_8class_yolo11l` ularni ko'rgan. Sizgan detektsiyalar: 66 / 70 / 67.
+  Barcha detektorlar bir xil **tozalangan** to'plamda baholandi.
+- **Ansambl (toza detektor `trained_8class_ai_v2_ep50`, α*=0,55, n=2088):**
+  | | YOLO | Ansambl | Δ | p |
+  |---|---|---|---|---|
+  | Aniqlik | 0,923 | 0,915 | −0,8 f.p. | 0,074 (ahamiyatsiz) |
+  | Muvozanatli aniqlik | 0,640 | **0,692** | +5,2 f.p. | **0,036** |
+  | Makro ROC-AUC | 0,897 | **0,976** | +7,9 f.p. | **<0,001** |
+  - Foyda kam ta'minlangan sinflarda: BIRADS 1–2 sezgirlik 0,667→0,833; assimetriya 0,429→0,571;
+    kalsifikatsiya 0,954→0,995. Limfa tuguni 0,932→0,910 (almashuv).
+- **Sizishga uchragan detektorlarda ansambl aniqlikni AHAMIYATLI pasaytiradi** (p<0,001).
+  Sizish `α*` ni ham buzadi: 0,30 / 0,35 (sizgan) vs 0,55 (toza). «Ansambl har doim foyda beradi»
+  degan qarash rad etildi.
+
+### Maqolalar (6 .docx, `/home/ai/mamograf_yangilash_21-iyun/`)
+1. `MAMOGRAF_Maqola_2026_M1_Barqarorlik_{UZ,RU,EN}.docx` — nazariy-metodologik
+   (belgi tanlash barqarorligi, ko'lam effekti). 15 raqamli tenglama, 5 jadval, 4 rasm.
+2. `MAMOGRAF_Maqola_2026_M2_Ansambl_{UZ,RU,EN}.docx` — amaliy
+   (gibrid ansambl, sizish nazorati, klinik talqin). 18 raqamli tenglama, 6 jadval, 5 rasm.
+
+**Barcha formulalar Word-native OMML (MathType-mos), rasm emas.** Har bir .docx'da
+124–157 ta `m:oMath` tugun; xom LaTeX qoldiq = 0; OMML sxema tekshiruvi 1032 tugunda 0 xato.
+
+### Yangi modullar
+- `scripts/omml.py` — `rad()`, `absv()` qo'shildi
+- `scripts/maqola_formulalar_ext.py` — Kuncheva, Jaccard, o'rtacha o'rin, kelishuv, α*,
+  BAcc, Spec, MCC, κ, AUC-OvR, bootstrap CI, juftlashgan Δ, IoU, leakage ta'rifi
+- `scripts/maqola_kit.py` — umumiy .docx qurish (sarlavha/jadval/rasm ham inline OMML qabul qiladi)
+- `scripts/m1_body_i18n.py`, `scripts/m2_body_i18n.py` — RU/EN professional tarjima
+
+### Tuzoqlar
+- `python-docx` **konteynerda yo'q**; host'da bor: `PYTHONPATH=/home/ai/.local/lib/python3.12/site-packages`.
+  Yangi image qurib bo'lmaydi (pip SSL sertifikat xatosi).
+- `numpy`/`matplotlib` esa faqat konteynerda → rasmlar `mamograf-prod-app` ichida, .docx host'da quriladi.
+- OMML'da `sub(run(""), ...)` va bo'sh `nary` tanasi Word'da **bo'sh quti** bo'lib ko'rinadi —
+  tekshirish uchun `m:e` bo'shligini sanash kerak.
