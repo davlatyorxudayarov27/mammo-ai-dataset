@@ -249,8 +249,13 @@ Prod volume'dagi kod va `~/plan_project_new` dev nusxasi **ikki tomonlama** farq
 prod'dagi xavfsizlik tuzatishlarini O'CHIRIB yuboradi!
 **Chora (2026-07-10):** prod kodning to'liq snapshoti olindi →
 `backups/prod_code_snapshot_20260710.tar.gz` (276K, kod fayllari: *.py, static, boolfs, gmic/src, scripts).
-**Keyingi qadam:** prod'dagi main.py/app.js/train.html o'zgarishlarini dev'ga merge qilish kerak
-(shundan keyingina oddiy deploy xavfsiz bo'ladi).
+**✅ MERGE BAJARILDI (2026-07-10):** prod'dagi barcha noyob o'zgarishlar dev'ga qaytarildi:
+- `main.py`, `train.html` — prod versiyasi olindi (dev'dagi hamma narsa + xavfsizlik + bf-blok ichida bor edi);
+- `app.js` — dev (yangiroq: study hanging 4-view, GMIC diag, admin nav) + prod'dan cookie-logout 2 qatori;
+- prod-only sahifalar nusxalandi: `ai_report.html`, `preprocessing_lab.html`, `auto_annotate_status.html`.
+- ⚠️ Yagona hal qilinmagan farq: `auto_annotate.html` dev va prod'da ikki xil variant (ikkalasi 08-iyul);
+  dev'niki saqlandi, prod'niki snapshot arxivida turibdi.
+Endi dev → prod deploy xavfsiz (dev to'liq superset).
 
 ---
 

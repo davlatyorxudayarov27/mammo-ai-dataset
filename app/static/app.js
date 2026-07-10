@@ -232,6 +232,8 @@ async function doLogin(username, password, totpCode) {
 }
 
 function doLogout() {
+  // Server HttpOnly auth-cookie'ni tozalasin (JS o'zi o'chira olmaydi).
+  api('/api/auth/logout', { method: 'POST' }).catch(() => {});
   setToken(null);
   state._user = null;
   updateUserBar();

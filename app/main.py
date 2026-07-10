@@ -17,7 +17,7 @@ from typing import Optional
 import pydicom
 from fastapi import BackgroundTasks, Depends, FastAPI, File, HTTPException, Query, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from slowapi import Limiter, _rate_limit_exceeded_handler
@@ -38,6 +38,10 @@ from . import inference as inf
 from . import pacs as pacs_mod
 from . import remote_train as remote_train
 from . import ws as ws_mod
+try:
+    from . import boolfs_api as boolfs_api   # bulcha belgilar (Xamdamov) — 2-bosqich klassifikator
+except Exception:  # numpy/skimage yo'q bo'lsa — bo'lim o'chadi, ilova ishlayveradi
+    boolfs_api = None
 try:
     from . import gmic_infer as gmic_infer
 except Exception:  # vendored GMIC yoki numpy yo'q bo'lsa — GMIC funksiyasi o'chadi
@@ -313,8 +317,49 @@ def _audit_identity(request: Request):
     return None, None
 
 
+# --------------------------------------------------------------------------- #
+# Global auth-guard: /api/** endpointlari token talab qiladi.                  #
+# Ilgari ~25 GET endpoint (bemor qidiruvi, fayllar, eksport, rasm) autentifi-  #
+# katsiyasiz ochiq edi — internetdan PHI sizardi. Endi bitta joyda yopiladi;    #
+# yangi qo'shilgan /api/* endpointlar ham avtomatik himoyalanadi.               #
+#                                                                              #
+# Token ikki manbadan qabul qilinadi:                                          #
+#   • Authorization: Bearer <jwt>  — barcha metodlar uchun (frontend api()).    #
+#   • mg_auth cookie               — FAQAT GET/HEAD uchun, <img src> rasm        #
+#     yuklashlari token qo'sha olmaydi. GET-only bo'lgani uchun CSRF xavfsiz    #
+#     (yozuv metodlari hamon header talab qiladi).                             #
+COOKIE_NAME = "mg_auth"
+# Autentifikatsiyasiz ochiq qoladigan /api yo'llari (login sahifasi uchun).
+_PUBLIC_API = {"/api/config", "/api/auth/login"}
+
+
+def _guard_ok(request: Request) -> bool:
+    auth = request.headers.get("Authorization", "")
+    if auth.startswith("Bearer "):
+        try:
+            auth_mod.decode_token(auth[7:])
+            return True
+        except Exception:
+            return False
+    # Cookie faqat xavfsiz (o'qish) metodlar uchun — CSRF'dan himoya.
+    if request.method in ("GET", "HEAD"):
+        tok = request.cookies.get(COOKIE_NAME)
+        if tok:
+            try:
+                auth_mod.decode_token(tok)
+                return True
+            except Exception:
+                return False
+    return False
+
+
 @app.middleware("http")
 async def security_headers(request: Request, call_next):
+    _p = request.url.path
+    if (_p.startswith("/api/") and _p not in _PUBLIC_API
+            and request.method != "OPTIONS"
+            and not _guard_ok(request)):
+        return JSONResponse({"detail": "authentication required"}, status_code=401)
     response = await call_next(request)
     # --- Foydalanuvchi harakati auditi -------------------------------------- #
     try:
@@ -338,6 +383,8 @@ async def security_headers(request: Request, call_next):
     response.headers["Permissions-Policy"] = "interest-cohort=()"
     if request.url.path.startswith("/mentor"):
         response.headers["Content-Security-Policy"] = _CSP_MENTOR
+    elif request.url.path.startswith(("/server", "/iqttalim", "/harakat")):
+        pass  # proxylangan ilovalar o'z CSP/X-Frame headerlarini o'zi yuboradi
     else:
         response.headers["X-Frame-Options"] = "DENY"
         response.headers["Content-Security-Policy"] = _CSP
@@ -394,7 +441,7 @@ class LoginBody(BaseModel):
 
 @app.post("/api/auth/login")
 @limiter.limit("10/minute")
-def auth_login(request: Request, body: LoginBody):
+def auth_login(request: Request, body: LoginBody, response: Response):
     user = auth_mod.get_user_by_username(body.username)
     if not user or not user.get("is_active"):
         raise HTTPException(401, "invalid credentials")
@@ -433,11 +480,24 @@ def auth_login(request: Request, body: LoginBody):
     token, exp = auth_mod.issue_token(user)
     pub = auth_mod.public_user(user)
     pub["totp_setup_required"] = auth_mod.needs_totp_setup(user)
+    # HttpOnly cookie — <img src> rasm yuklashlari uchun (JS o'qiy olmaydi).
+    # Muddati JWT bilan bir xil; GET-only qabul qilingani uchun CSRF xavfsiz.
+    response.set_cookie(
+        COOKIE_NAME, token, max_age=int(auth_mod.TOKEN_TTL.total_seconds()),
+        httponly=True, secure=True, samesite="lax", path="/",
+    )
     return {
         "token": token,
         "expires_at": exp,
         "user": pub,
     }
+
+
+@app.post("/api/auth/logout")
+def auth_logout(response: Response):
+    # HttpOnly cookie'ni faqat server o'chira oladi.
+    response.delete_cookie(COOKIE_NAME, path="/")
+    return {"ok": True}
 
 
 @app.get("/api/settings")
@@ -781,23 +841,49 @@ def _filter_annotations(anns: list[dict], body: ExportAnnotatedBody) -> bool:
     return True
 
 
-@app.post("/api/export/annotated")
-def export_annotated(
-    body: ExportAnnotatedBody,
-    _user: dict = Depends(auth_mod.require_user),
-):
-    """Annotation bor (yoki belgilangan status'dagi) fayllarni boshqa papkaga ko'chiradi.
-    Asl fayllar joyida qoladi (copy). Annotation JSON sidecar ixtiyoriy."""
-    import shutil
-
-    dest_str = (body.destination or "").strip()
+def _validate_export_dest(dest_str: str, allow_subtrees: tuple = ()) -> Path:
+    """Eksport maqsad papkasini xavfsizlik uchun tekshiradi.
+    Taqiqlangan: sistem papkalari VA ilovaning o'z daraxti (/app/app —
+    kod, DB, modellar, uploads, annotations). Aks holda past-huquqli
+    foydalanuvchi ilova fayllarini almashtirishi yoki volume'ni to'ldirishi mumkin edi.
+    allow_subtrees — app daraxti ichida ruxsat berilgan istisnolar (mas. training_data)."""
     if not dest_str:
         raise HTTPException(400, "destination yo'l bo'sh")
     dest = Path(dest_str)
-    # Xavfsizlik: sistem papkalariga yozishga ruxsat bermaymiz
-    forbidden_starts = [r"C:\Windows", r"C:\Program Files", "/etc", "/usr", "/bin", "/sbin", "/sys", "/proc"]
-    if any(str(dest).lower().startswith(x.lower()) for x in forbidden_starts):
-        raise HTTPException(400, f"Bu papkaga yozish taqiqlangan: {dest}")
+    try:
+        rp = dest.resolve()
+    except Exception:
+        raise HTTPException(400, "noto'g'ri destination yo'li")
+    # Sistem papkalari (symlink orqali ham chetlab o'tib bo'lmasin — resolve'dan keyin)
+    forbidden = ["/etc", "/usr", "/bin", "/sbin", "/lib", "/lib64", "/boot",
+                 "/sys", "/proc", "/dev", "/root", "/var/lib", "/var/run", "/run"]
+    low = str(rp).lower()
+    if low.startswith(("c:\\windows", "c:\\program files")) or \
+       any(low == x or low.startswith(x + "/") for x in forbidden):
+        raise HTTPException(400, f"Bu papkaga yozish taqiqlangan: {rp}")
+    # Ruxsat berilgan istisno subtree (mas. training_data) — app-root taqiqidan ozod
+    for a in allow_subtrees:
+        ar = Path(a).resolve()
+        if rp == ar or ar in rp.parents:
+            return dest
+    # Ilovaning o'z daraxtiga (kod/DB/modellar/uploads/annotations) yozish taqiqlangan
+    app_root = BASE_DIR.resolve()
+    if rp == app_root or app_root in rp.parents:
+        raise HTTPException(400, "Ilova papkasi ichiga eksport qilib bo'lmaydi")
+    return dest
+
+
+@app.post("/api/export/annotated")
+def export_annotated(
+    body: ExportAnnotatedBody,
+    _user: dict = Depends(auth_mod.require_role("admin", "reviewer")),
+):
+    """Annotation bor (yoki belgilangan status'dagi) fayllarni boshqa papkaga ko'chiradi.
+    Asl fayllar joyida qoladi (copy). Annotation JSON sidecar ixtiyoriy.
+    Faqat admin/reviewer — past-huquqli annotator ixtiyoriy papkaga yoza olmasin."""
+    import shutil
+
+    dest = _validate_export_dest((body.destination or "").strip())
     try:
         dest.mkdir(parents=True, exist_ok=True)
     except Exception as e:
@@ -2107,7 +2193,7 @@ def _polygon_to_bbox_pts(points: list[list[float]]) -> tuple[float, float, float
 @app.post("/api/training/prepare")
 def training_prepare(
     body: TrainingPrepareBody,
-    _user: dict = Depends(auth_mod.require_user),
+    _user: dict = Depends(auth_mod.require_role("admin", "reviewer")),
 ):
     """Annotation'lardan YOLO (Ultralytics) dataset yaratadi:
         <dest>/
@@ -2131,9 +2217,8 @@ def training_prepare(
         staging_root.mkdir(parents=True, exist_ok=True)
         safe_name = re.sub(r"[^A-Za-z0-9_.-]+", "_", dest.name).strip("._-") or "dataset"
         dest = staging_root / safe_name
-    forbidden_starts = [r"C:\Windows", r"C:\Program Files", "/etc", "/usr", "/bin", "/sbin", "/sys", "/proc"]
-    if any(str(dest).lower().startswith(x.lower()) for x in forbidden_starts):
-        raise HTTPException(400, f"Bu papkaga yozish taqiqlangan: {dest}")
+    # training_data staging'iga ruxsat, boshqa app-ichi/sistem papkalari taqiqlangan
+    dest = _validate_export_dest(str(dest), allow_subtrees=(BASE_DIR / "training_data",))
     try:
         dest.mkdir(parents=True, exist_ok=True)
     except Exception as e:
@@ -5625,5 +5710,105 @@ async def _mentor_proxy(path: str, request: _MentorRequest):
                            headers=out_headers,
                            media_type=rr.headers.get("content-type"))
 
+
+
+# --------------------------------------------------------------------------- #
+# Server panel reverse-proxy: /server/* -> monitoring paneli (10.10.0.75:8095) #
+# Mentor proxy'si bilan bir xil andoza; static mount'dan OLDIN turishi shart.  #
+# --------------------------------------------------------------------------- #
+_SERVERPANEL_URL = os.environ.get("SERVERPANEL_URL", "http://10.10.0.75:8095").rstrip("/")
+
+
+@app.get("/server", include_in_schema=False)
+def _serverpanel_root_redirect():
+    return _MentorRedirect(url="/server/")
+
+
+@app.api_route("/server/{path:path}", include_in_schema=False,
+               methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"])
+async def _serverpanel_proxy(path: str, request: _MentorRequest):
+    """/server/<path> ni monitoring paneliga (/<path>) shaffof uzatadi."""
+    target = f"{_SERVERPANEL_URL}/{path}"
+    body = await request.body()
+    fwd_headers = {k: v for k, v in request.headers.items()
+                   if k.lower() not in ("host", "content-length")}
+    try:
+        async with _mentor_httpx.AsyncClient(timeout=120.0) as client:
+            rr = await client.request(request.method, target,
+                                      params=request.query_params,
+                                      content=body, headers=fwd_headers)
+    except Exception as e:  # noqa: BLE001
+        return _MentorResponse(content=f"Server paneliga ulanib bo'lmadi: {e}".encode(),
+                               status_code=502)
+    drop = {"content-encoding", "transfer-encoding", "connection", "content-length"}
+    out_headers = {k: v for k, v in rr.headers.items() if k.lower() not in drop}
+    return _MentorResponse(content=rr.content, status_code=rr.status_code,
+                           headers=out_headers,
+                           media_type=rr.headers.get("content-type"))
+
+
+
+# --------------------------------------------------------------------------- #
+# iqttalim & harakat reverse-proxy (edge katch-all faqat mamograf'ga uzatadi). #
+# Prefiks SAQLANADI: /iqttalim/x -> 8094/iqttalim/x, /harakat/x -> 8093/harakat/x
+# --------------------------------------------------------------------------- #
+_EXTRA_PROXIES = {
+    "iqttalim": os.environ.get("IQTTALIM_URL", "http://10.10.0.75:8094").rstrip("/"),
+    "harakat": os.environ.get("HARAKAT_URL", "http://10.10.0.75:8093").rstrip("/"),
+}
+
+
+async def _extra_proxy(prefix: str, path: str, request: _MentorRequest):
+    target = f"{_EXTRA_PROXIES[prefix]}/{prefix}/{path}"
+    body = await request.body()
+    # Host SAQLANADI: Django (iqttalim) CSRF/ALLOWED_HOSTS asl domenni kutadi
+    fwd_headers = {k: v for k, v in request.headers.items()
+                   if k.lower() != "content-length"}
+    try:
+        async with _mentor_httpx.AsyncClient(timeout=900.0,
+                                             follow_redirects=False) as client:
+            rr = await client.request(request.method, target,
+                                      params=request.query_params,
+                                      content=body, headers=fwd_headers)
+    except Exception as e:  # noqa: BLE001
+        return _MentorResponse(content=f"{prefix} xizmatiga ulanib bo'lmadi: {e}".encode(),
+                               status_code=502)
+    drop = {"content-encoding", "transfer-encoding", "connection",
+            "content-length", "content-type"}
+    resp = _MentorResponse(content=rr.content, status_code=rr.status_code,
+                           media_type=rr.headers.get("content-type"))
+    # multi_items: bir nechta Set-Cookie header yo'qolmasligi shart (Django sessiya+CSRF)
+    for k, v in rr.headers.multi_items():
+        if k.lower() not in drop:
+            resp.headers.append(k, v)
+    return resp
+
+
+@app.get("/iqttalim", include_in_schema=False)
+def _iqttalim_root_redirect():
+    return _MentorRedirect(url="/iqttalim/")
+
+
+@app.api_route("/iqttalim/{path:path}", include_in_schema=False,
+               methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"])
+async def _iqttalim_proxy(path: str, request: _MentorRequest):
+    return await _extra_proxy("iqttalim", path, request)
+
+
+@app.get("/harakat", include_in_schema=False)
+def _harakat_root_redirect():
+    return _MentorRedirect(url="/harakat/")
+
+
+@app.api_route("/harakat/{path:path}", include_in_schema=False,
+               methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"])
+async def _harakat_proxy(path: str, request: _MentorRequest):
+    return await _extra_proxy("harakat", path, request)
+
+
+# boolfs (Xamdamov: bulcha belgilar) — StaticFiles mount'idan OLDIN ulanishi shart,
+# aks holda "/" mount barcha /api/boolfs/* so'rovlarni ushlab qoladi.
+if boolfs_api is not None:
+    app.include_router(boolfs_api.router)
 
 app.mount("/", StaticFiles(directory=str(STATIC_DIR), html=True), name="static")

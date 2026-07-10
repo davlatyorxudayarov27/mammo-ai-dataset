@@ -1,0 +1,588 @@
+<title>Mammografiya Preprocessing Laboratoriyasi</title>
+<style>
+  :root{
+    --bg:#0b0f14; --panel:#121a22; --panel2:#18222d; --line:#25323f;
+    --ink:#e7eef4; --muted:#8b9cab; --faint:#5c6b78;
+    --accent:#38bdf8; --accent-ink:#0a1620;
+    --lesion:#fbbf24;
+    --good:#4ade80; --warn:#fbbf24; --crit:#f87171;
+    --shadow:0 1px 0 rgba(255,255,255,.03), 0 8px 24px rgba(0,0,0,.35);
+    --font-ui:system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    --font-mono:ui-monospace,"SF Mono","JetBrains Mono",Menlo,Consolas,monospace;
+    --r:12px;
+  }
+  @media (prefers-color-scheme:light){
+    :root{
+      --bg:#eef2f6; --panel:#ffffff; --panel2:#f3f7fb; --line:#d9e1ea;
+      --ink:#152230; --muted:#54677a; --faint:#8496a6;
+      --accent:#0284c7; --accent-ink:#ffffff;
+      --lesion:#b45309;
+      --good:#15803d; --warn:#b45309; --crit:#b91c1c;
+      --shadow:0 1px 2px rgba(16,32,48,.06),0 10px 30px rgba(16,32,48,.08);
+    }
+  }
+  :root[data-theme="dark"]{
+    --bg:#0b0f14; --panel:#121a22; --panel2:#18222d; --line:#25323f;
+    --ink:#e7eef4; --muted:#8b9cab; --faint:#5c6b78; --accent:#38bdf8; --accent-ink:#0a1620;
+    --lesion:#fbbf24; --good:#4ade80; --warn:#fbbf24; --crit:#f87171;
+    --shadow:0 1px 0 rgba(255,255,255,.03),0 8px 24px rgba(0,0,0,.35);
+  }
+  :root[data-theme="light"]{
+    --bg:#eef2f6; --panel:#ffffff; --panel2:#f3f7fb; --line:#d9e1ea;
+    --ink:#152230; --muted:#54677a; --faint:#8496a6; --accent:#0284c7; --accent-ink:#ffffff;
+    --lesion:#b45309; --good:#15803d; --warn:#b45309; --crit:#b91c1c;
+    --shadow:0 1px 2px rgba(16,32,48,.06),0 10px 30px rgba(16,32,48,.08);
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--font-ui);
+    line-height:1.55;-webkit-font-smoothing:antialiased;}
+  .wrap{max-width:1180px;margin:0 auto;padding:22px 20px 80px}
+  a{color:var(--accent)}
+  h1,h2,h3{text-wrap:balance;margin:0}
+  .eyebrow{font-family:var(--font-mono);font-size:11px;letter-spacing:.18em;text-transform:uppercase;color:var(--accent);font-weight:600}
+  .mono{font-family:var(--font-mono);font-variant-numeric:tabular-nums}
+
+  /* header */
+  header{display:flex;justify-content:space-between;align-items:flex-end;gap:20px;
+    padding-bottom:18px;border-bottom:1px solid var(--line);margin-bottom:22px;flex-wrap:wrap}
+  header h1{font-size:26px;font-weight:700;letter-spacing:-.01em;margin-top:6px}
+  header .sub{color:var(--muted);font-size:14px;max-width:56ch;margin-top:6px}
+  .src{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+  .btn{font-family:var(--font-ui);font-size:13px;font-weight:600;border-radius:9px;
+    border:1px solid var(--line);background:var(--panel2);color:var(--ink);padding:8px 12px;cursor:pointer;
+    transition:border-color .15s,background .15s}
+  .btn:hover{border-color:var(--accent)}
+  .btn.on{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
+  .btn:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+
+  /* main layout */
+  .lab{display:grid;grid-template-columns:1.15fr .85fr;gap:18px;align-items:start}
+  @media (max-width:900px){.lab{grid-template-columns:1fr}}
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);box-shadow:var(--shadow)}
+  .panel-h{display:flex;justify-content:space-between;align-items:center;padding:12px 15px;border-bottom:1px solid var(--line)}
+  .panel-h h2{font-size:13px;font-weight:700;letter-spacing:.02em;text-transform:uppercase;color:var(--muted)}
+
+  /* viewer */
+  .viewer{padding:15px}
+  .stage{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+  @media (max-width:520px){.stage{grid-template-columns:1fr}}
+  .imgbox{background:#000;border-radius:10px;overflow:hidden;position:relative;border:1px solid var(--line)}
+  :root[data-theme="light"] .imgbox{background:#0b0f14}
+  .imgbox canvas{display:block;width:100%;height:auto;image-rendering:auto}
+  .imgbox .tag{position:absolute;top:8px;left:8px;font-family:var(--font-mono);font-size:10px;letter-spacing:.1em;
+    text-transform:uppercase;background:rgba(0,0,0,.55);color:#dfe8ef;padding:3px 7px;border-radius:6px;border:1px solid rgba(255,255,255,.12)}
+  .imgbox .tag.out{color:var(--accent)}
+  .histwrap{margin-top:13px}
+  .histwrap .lbl{display:flex;justify-content:space-between;color:var(--faint);font-size:11px;
+    font-family:var(--font-mono);text-transform:uppercase;letter-spacing:.12em;margin-bottom:5px}
+  #hist{display:block;width:100%;height:70px;background:var(--panel2);border-radius:8px;border:1px solid var(--line)}
+
+  /* detectability readout */
+  .readout{padding:14px 15px;border-top:1px solid var(--line)}
+  .score-row{display:flex;align-items:center;gap:14px;margin-bottom:12px}
+  .score-big{font-family:var(--font-mono);font-size:38px;font-weight:700;line-height:1;font-variant-numeric:tabular-nums}
+  .score-meta{font-size:12.5px;color:var(--muted)}
+  .score-meta b{color:var(--ink)}
+  .metric{margin:9px 0}
+  .metric .top{display:flex;justify-content:space-between;font-size:12px;margin-bottom:4px}
+  .metric .top .m{font-family:var(--font-mono);font-variant-numeric:tabular-nums;color:var(--muted)}
+  .track{height:7px;border-radius:5px;background:var(--panel2);overflow:hidden;border:1px solid var(--line)}
+  .track > i{display:block;height:100%;border-radius:5px;transition:width .25s ease}
+
+  /* controls / pipeline */
+  .steps{padding:6px 6px 10px}
+  .step{border-radius:10px;padding:11px 12px;margin:6px 4px;border:1px solid transparent;transition:border-color .15s,background .15s}
+  .step.active{background:var(--panel2);border-color:var(--line)}
+  .step-h{display:flex;align-items:center;gap:10px}
+  .num{font-family:var(--font-mono);font-size:11px;color:var(--faint);width:20px;flex:none}
+  .sw{position:relative;width:38px;height:22px;border-radius:22px;background:var(--line);cursor:pointer;flex:none;transition:background .18s;border:none;padding:0}
+  .sw::after{content:"";position:absolute;top:2px;left:2px;width:18px;height:18px;border-radius:50%;background:#fff;transition:transform .18s}
+  .sw.on{background:var(--accent)}
+  .sw.on::after{transform:translateX(16px)}
+  .step-name{font-weight:600;font-size:14px;flex:1}
+  .step-name small{display:block;font-weight:400;color:var(--faint);font-size:11.5px;font-family:var(--font-mono)}
+  .params{margin-top:10px;padding-left:30px;display:none;flex-direction:column;gap:9px}
+  .step.active.open .params{display:flex}
+  .ctl{display:grid;grid-template-columns:88px 1fr 46px;align-items:center;gap:10px}
+  .ctl label{font-size:12px;color:var(--muted)}
+  .ctl output{font-family:var(--font-mono);font-size:12px;text-align:right;color:var(--ink);font-variant-numeric:tabular-nums}
+  input[type=range]{width:100%;accent-color:var(--accent);height:4px}
+  select{font-family:var(--font-ui);font-size:12.5px;background:var(--panel);color:var(--ink);
+    border:1px solid var(--line);border-radius:7px;padding:5px 7px;grid-column:2/4}
+
+  /* education */
+  .edu{margin-top:26px}
+  .edu h2{font-size:19px;font-weight:700;margin-bottom:4px}
+  .edu .lead{color:var(--muted);font-size:14px;margin-bottom:16px;max-width:70ch}
+  .cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(270px,1fr));gap:14px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);padding:15px 16px;box-shadow:var(--shadow)}
+  .card h3{font-size:15px;font-weight:700;display:flex;align-items:center;gap:8px;margin-bottom:2px}
+  .card .k{font-family:var(--font-mono);font-size:10px;color:var(--faint);letter-spacing:.08em}
+  .card p{font-size:13px;color:var(--muted);margin:8px 0}
+  .card .eff{font-size:12.5px;border-top:1px dashed var(--line);padding-top:9px;margin-top:9px}
+  .card .eff b{color:var(--ink)}
+  .chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:9px}
+  .chip{font-family:var(--font-mono);font-size:10.5px;padding:3px 8px;border-radius:20px;border:1px solid var(--line);
+    display:inline-flex;gap:5px;align-items:center;background:var(--panel2)}
+  .chip::before{content:"";width:7px;height:7px;border-radius:50%}
+  .chip.up::before{background:var(--good)} .chip.dn::before{background:var(--crit)}
+  .chip.warn::before{background:var(--warn)} .chip.neu::before{background:var(--faint)}
+
+  /* recommended pipeline */
+  .reco{margin-top:26px;background:linear-gradient(180deg,var(--panel),var(--panel2));
+    border:1px solid var(--line);border-radius:var(--r);padding:20px 20px 6px;box-shadow:var(--shadow)}
+  .reco h2{font-size:18px;font-weight:700}
+  .reco p.sub{color:var(--muted);font-size:13.5px;margin:4px 0 16px}
+  .flow{display:flex;flex-wrap:wrap;gap:8px;align-items:stretch;padding-bottom:14px}
+  .node{flex:1 1 130px;min-width:120px;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:10px 11px;position:relative}
+  .node .n{font-family:var(--font-mono);font-size:10px;color:var(--accent);letter-spacing:.1em}
+  .node .t{font-weight:600;font-size:13px;margin-top:2px}
+  .node .d{font-size:11.5px;color:var(--muted);margin-top:3px}
+  .reco table{width:100%;border-collapse:collapse;margin-bottom:14px;font-size:13px}
+  .reco th,.reco td{text-align:left;padding:8px 6px;border-bottom:1px solid var(--line);vertical-align:top}
+  .reco th{font-family:var(--font-mono);font-size:10.5px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);font-weight:600}
+  .reco td.v{font-family:var(--font-mono);color:var(--accent);white-space:nowrap}
+  .foot{margin-top:26px;color:var(--faint);font-size:12px;text-align:center;line-height:1.7}
+  .hint{font-size:12px;color:var(--faint);padding:0 6px 8px}
+</style>
+
+<div class="wrap">
+  <header>
+    <div>
+      <div class="eyebrow">AI Scan · Mammografiya · Dataset pipeline</div>
+      <h1>Preprocessing Laboratoriyasi</h1>
+      <div class="sub">Dataset yig'ishдан oldingi <b>dastlabki ishlov berish</b> bosqichlarini jonli sinang — har bir usul rasmni qanday o'zgartirishini va <b>deteksiya natijasiga</b> qanday ta'sir qilishini real vaqtда ko'ring.</div>
+    </div>
+    <div class="src">
+      <button class="btn on" id="srcSyn" title="Sun'iy MLO mammogramma">Sun'iy MLO</button>
+      <label class="btn" for="up">Rasm yuklash</label>
+      <input id="up" type="file" accept="image/*" style="display:none">
+      <button class="btn" id="reset">Qayta</button>
+      <button class="btn" id="theme" title="Yorug'/qorong'i">◐</button>
+    </div>
+  </header>
+
+  <div class="lab">
+    <!-- LEFT: viewer -->
+    <section class="panel">
+      <div class="panel-h"><h2>Ko'rik — oldin / keyin</h2><span class="mono" style="font-size:11px;color:var(--faint)" id="dims">—</span></div>
+      <div class="viewer">
+        <div class="stage">
+          <div class="imgbox"><span class="tag">ASL (RAW)</span><canvas id="cIn"></canvas></div>
+          <div class="imgbox"><span class="tag out">ISHLOV BERILGAN</span><canvas id="cOut"></canvas></div>
+        </div>
+        <div class="histwrap">
+          <div class="lbl"><span>Gistogramma (piksel taqsimoti)</span><span id="histLbl">asl · ishlov berilgan</span></div>
+          <canvas id="hist" width="600" height="140"></canvas>
+        </div>
+      </div>
+      <div class="readout">
+        <div class="score-row">
+          <div class="score-big" id="scoreN">—</div>
+          <div class="score-meta">
+            <div style="font-family:var(--font-mono);font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--accent)">Deteksiya-yaroqlilik</div>
+            <div id="scoreTxt">Lezyonlar model uchun qanchalik ajralib turadi</div>
+          </div>
+        </div>
+        <div class="metric">
+          <div class="top"><span>Massa kontrasti <span style="color:var(--faint)">(yumshoq o'sma)</span></span><span class="m" id="mMass">—</span></div>
+          <div class="track"><i id="bMass" style="width:0;background:var(--good)"></i></div>
+        </div>
+        <div class="metric">
+          <div class="top"><span>Mikrokalsifikat ko'rinishi <span style="color:var(--faint)">(mayda nuqtalar)</span></span><span class="m" id="mCalc">—</span></div>
+          <div class="track"><i id="bCalc" style="width:0;background:var(--lesion)"></i></div>
+        </div>
+        <div class="metric">
+          <div class="top"><span>Shovqin darajasi <span style="color:var(--faint)">(past = yaxshi)</span></span><span class="m" id="mNoise">—</span></div>
+          <div class="track"><i id="bNoise" style="width:0;background:var(--crit)"></i></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- RIGHT: pipeline -->
+    <section class="panel">
+      <div class="panel-h"><h2>Pipeline — bosqichlar</h2><button class="btn" id="allOn" style="padding:4px 9px;font-size:12px">Tavsiya</button></div>
+      <div class="hint">Har bosqichni yoqing/o'chiring va parametrlarни surib ko'ring. Tartib yuqoridan pastga qo'llanadi.</div>
+      <div class="steps" id="steps"></div>
+    </section>
+  </div>
+
+  <!-- EDUCATION -->
+  <section class="edu">
+    <h2>Har bir usul natijaga qanday ta'sir qiladi</h2>
+    <p class="lead">Preprocessing — modelning "ko'zi"ni sozlash. Noto'g'ri bosqich lezyonni yashiradi yoki soxta signal qo'shadi; to'g'ri bosqich mAP va recall'ni oshiradi. Quyida har birining <b>train natijasiga</b> ta'siri.</p>
+    <div class="cards" id="cards"></div>
+  </section>
+
+  <!-- RECOMMENDED PIPELINE -->
+  <section class="reco">
+    <h2>Bu loyiha uchun tavsiya etilgan pipeline</h2>
+    <p class="sub">8-klass detektor · YOLO11 · 9195 DICOM · 1280px. Barqaror, takrorlanadigan va lezyon-do'st ketma-ketlik:</p>
+    <div class="flow" id="flow"></div>
+    <table>
+      <thead><tr><th>Bosqich</th><th>Sozlama (tavsiya)</th><th>Nega</th></tr></thead>
+      <tbody>
+        <tr><td>Photometric</td><td class="v">MONOCHROME1 → invert</td><td>Polaritetни barcha fayllarда bir xil qilish; aks holda model teskari kontrastда adashadi.</td></tr>
+        <tr><td>VOI LUT / Window</td><td class="v">DICOM WC/WW yoki persentil</td><td>16-bitни ko'rinadigan diapazonga solish; yumshoq to'qima ko'rinadi.</td></tr>
+        <tr><td>Normalizatsiya</td><td class="v">persentil 1–99% → [0,1]</td><td>Autliyer piksellarни kesib, kontrastни barqarorlashtiradi; batch bo'ylab bir xil taqsimot.</td></tr>
+        <tr><td>CLAHE</td><td class="v">clip 2.0–3.0 · 8×8 tile</td><td>Mayda kalsifikatlar va yumshoq massalarни ochadi. Juda baland → shovqin, soxta pozitivlar.</td></tr>
+        <tr><td>Ko'krak segmentatsiyasi</td><td class="v">fon + yorliq olib tashlash</td><td>Rezolyutsiya ko'krakka sarflanadi; teglar/artefaktlar soxta belgi bermaydi.</td></tr>
+        <tr><td>Resize</td><td class="v">1280px · nisbat saqlab, padding</td><td>Mayda kalsifikatlar ko'rinib qoladi. Kichik o'lcham → ular yo'qoladi.</td></tr>
+        <tr><td>Chiqish</td><td class="v">8-bit PNG (lossless)</td><td>YOLO uchun; JPEG artefaktlari mayda belgilarни buzadi.</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <div class="foot">
+    Instrument tibbiy tashxis uchun emas — <b>preprocessing'ni tushuntirish va sinash</b> uchun.<br>
+    Barcha ishlov brauzeringizда bajariladi (rasm hech qayerga yuborilmaydi). Yuklagan rasmingiz ham lokal qoladi.
+  </div>
+</div>
+
+<script>
+"use strict";
+const W=336, H=430;                      // ishlov beriladigan rezolyutsiya
+const cIn=document.getElementById('cIn'), cOut=document.getElementById('cOut');
+cIn.width=W;cIn.height=H;cOut.width=W;cOut.height=H;
+const ax=cIn.getContext('2d'), bx=cOut.getContext('2d');
+const hist=document.getElementById('hist'), hx=hist.getContext('2d');
+const $=id=>document.getElementById(id);
+
+// ---- lezyon koordinatalari (sun'iy rasmда) ----
+const MASS={x:W*0.56,y:H*0.52,r:26};
+const CALC={x:W*0.40,y:H*0.66,r:16};
+let RAW=new Float32Array(W*H);           // asl grayscale 0..1
+let usingSynthetic=true;
+
+// ---------- Sun'iy MLO mammogramma ----------
+function rnd(seed){let s=seed>>>0;return()=>{s=(s*1664525+1013904223)>>>0;return s/4294967296}}
+function genSynthetic(){
+  const r=rnd(7);const g=new Float32Array(W*H);
+  for(let y=0;y<H;y++)for(let x=0;x<W;x++){
+    const i=y*W+x;
+    // ko'krak — chapдан chiqadigan yarim-ellips (MLO)
+    const cx=-40, cy=H*0.5, rx=W*0.92, ry=H*0.62;
+    const d=((x-cx)/rx)**2+((y-cy)/ry)**2;
+    let v=0.02+r()*0.012;                 // fon (deyarli qora)
+    if(d<1){
+      const edge=1-Math.sqrt(d);
+      v=0.30+0.20*edge;                   // to'qima gradienti
+      // fibroglandular tekstura
+      v+=0.05*Math.sin(x*0.09)*Math.cos(y*0.07)+0.04*(r()-0.5);
+      if(edge<0.06) v=0.55+0.15*(0.06-edge)/0.06;  // teri chizig'i (yorqin qirra)
+    }
+    // pektoral muskul — yuqori-chapда uchburchak (MLO)
+    if(x < (H*0.34 - y*0.55) && y < H*0.5){ v=Math.max(v,0.52+0.05*(r()-0.5)); }
+    g[i]=Math.min(1,Math.max(0,v));
+  }
+  // yumshoq massa (spikulali) — past kontrast
+  for(let y=-40;y<40;y++)for(let x=-40;x<40;x++){
+    const px=(MASS.x+x)|0, py=(MASS.y+y)|0; if(px<0||py<0||px>=W||py>=H)continue;
+    const dd=Math.sqrt(x*x+y*y); if(dd>MASS.r*1.6)continue;
+    const a=Math.exp(-(dd*dd)/(2*(MASS.r*0.6)**2))*0.13;
+    g[py*W+px]=Math.min(1,g[py*W+px]+a);
+  }
+  // mikrokalsifikat klasteri — juda mayda yorqin nuqtalar
+  const cr=rnd(21);
+  for(let k=0;k<9;k++){
+    const px=(CALC.x+(cr()-0.5)*CALC.r*1.8)|0, py=(CALC.y+(cr()-0.5)*CALC.r*1.8)|0;
+    if(px<1||py<1||px>=W-1||py>=H-1)continue;
+    g[py*W+px]=Math.min(1,g[py*W+px]+0.55);
+    // 1px atrofga ozgina
+    g[py*W+px+1]=Math.min(1,g[py*W+px+1]+0.18);
+    g[(py+1)*W+px]=Math.min(1,g[(py+1)*W+px]+0.18);
+  }
+  // sensor shovqini
+  for(let i=0;i<g.length;i++){ if(g[i]>0.05) g[i]=Math.min(1,Math.max(0,g[i]+(r()-0.5)*0.05)); }
+  return g;
+}
+
+// ---------- Pipeline bosqichlari ----------
+const STEPS=[
+  {id:'invert', name:'Photometric invert', sub:'MONOCHROME1 → 2', on:false, open:false, params:[]},
+  {id:'window', name:'Windowing (VOI LUT)', sub:'window center / width', on:false, open:false,
+    params:[{k:'wc',l:'Markaz',min:0,max:1,step:.01,v:.5},{k:'ww',l:'Kenglik',min:.05,max:1.4,step:.01,v:1.0}]},
+  {id:'norm', name:'Normalizatsiya', sub:'min-max / persentil / z-score', on:true, open:true,
+    params:[{k:'mode',l:'Usul',type:'select',opts:[['mm','min-max'],['pct','persentil 1–99%'],['z','z-score']],v:'pct'}]},
+  {id:'gamma', name:'Gamma tuzatish', sub:'yorug\'lik egri chizig\'i', on:false, open:false,
+    params:[{k:'g',l:'Gamma',min:.4,max:2.5,step:.05,v:1}]},
+  {id:'clahe', name:'CLAHE', sub:'lokal kontrast tenglash', on:true, open:true,
+    params:[{k:'clip',l:'Clip limit',min:1,max:6,step:.1,v:2.4},{k:'tiles',l:'Tile (n×n)',min:2,max:16,step:1,v:8}]},
+  {id:'denoise', name:'Denoise', sub:'Gauss silliqlash', on:false, open:false,
+    params:[{k:'amt',l:'Kuch',min:0,max:3,step:.1,v:.8}]},
+  {id:'pectoral', name:'Pektoral olib tashlash', sub:'MLO muskul maskasi', on:false, open:false, params:[]},
+  {id:'crop', name:'Ko\'krak segmentatsiyasi', sub:'fon + yorliq olib tashlash', on:true, open:false, params:[]},
+  {id:'resize', name:'Resize (rezolyutsiya)', sub:'nisbat saqlab', on:false, open:false,
+    params:[{k:'sz',l:'O\'lcham',type:'select',opts:[['1280','1280 px'],['1024','1024 px'],['640','640 px'],['320','320 px (juda kichik)']],v:'1024'}]},
+  {id:'augment', name:'Augmentatsiya (preview)', sub:'train-time: flip / rotatsiya / yorug\'lik', on:false, open:false,
+    params:[{k:'flip',l:'Flip',type:'select',opts:[['0','yo\'q'],['1','gorizontal']],v:'0'},
+            {k:'rot',l:'Burchak°',min:-15,max:15,step:1,v:0},
+            {k:'bright',l:'Yorug\'lik',min:-.25,max:.25,step:.01,v:0}]},
+];
+const S={};STEPS.forEach(s=>{S[s.id]={on:s.on,open:s.open};s.params.forEach(p=>S[s.id][p.k]=p.v)});
+
+// ---------- Algoritmlar (Float32 0..1 ustida) ----------
+function clone(a){return Float32Array.from(a)}
+function invert(a){for(let i=0;i<a.length;i++)a[i]=1-a[i];return a}
+function windowing(a,wc,ww){const lo=wc-ww/2,hi=wc+ww/2,d=Math.max(1e-4,hi-lo);
+  for(let i=0;i<a.length;i++)a[i]=Math.min(1,Math.max(0,(a[i]-lo)/d));return a}
+function normalize(a,mode){
+  if(mode==='z'){let m=0;for(const v of a)m+=v;m/=a.length;let s=0;for(const v of a)s+=(v-m)**2;s=Math.sqrt(s/a.length)||1e-4;
+    for(let i=0;i<a.length;i++)a[i]=Math.min(1,Math.max(0,(a[i]-m)/(3*s)+0.5));return a}
+  let lo,hi;
+  if(mode==='pct'){const s=Float32Array.from(a).sort();lo=s[(s.length*0.01)|0];hi=s[(s.length*0.99)|0];}
+  else{lo=1;hi=0;for(const v of a){if(v<lo)lo=v;if(v>hi)hi=v;}}
+  const d=Math.max(1e-4,hi-lo);for(let i=0;i<a.length;i++)a[i]=Math.min(1,Math.max(0,(a[i]-lo)/d));return a}
+function gamma(a,g){const e=1/g;for(let i=0;i<a.length;i++)a[i]=Math.pow(a[i],e);return a}
+function boxblur(a,rad){ // ajratilgan gauss-approx
+  if(rad<=0)return a;const tmp=new Float32Array(a.length);const k=Math.max(1,Math.round(rad));
+  for(let y=0;y<H;y++)for(let x=0;x<W;x++){let s=0,c=0;for(let t=-k;t<=k;t++){const xx=x+t;if(xx<0||xx>=W)continue;s+=a[y*W+xx];c++;}tmp[y*W+x]=s/c;}
+  for(let y=0;y<H;y++)for(let x=0;x<W;x++){let s=0,c=0;for(let t=-k;t<=k;t++){const yy=y+t;if(yy<0||yy>=H)continue;s+=tmp[yy*W+x];c++;}a[y*W+x]=s/c;}
+  return a}
+function clahe(a,clip,tiles){
+  const nx=tiles,ny=tiles,tw=Math.ceil(W/nx),th=Math.ceil(H/ny),bins=64;
+  const maps=[];                       // har tile uchun CDF mapping
+  for(let ty=0;ty<ny;ty++)for(let tx=0;tx<nx;tx++){
+    const h=new Float32Array(bins);let n=0;
+    const x0=tx*tw,y0=ty*th,x1=Math.min(W,x0+tw),y1=Math.min(H,y0+th);
+    for(let y=y0;y<y1;y++)for(let x=x0;x<x1;x++){h[Math.min(bins-1,(a[y*W+x]*(bins-1))|0)]++;n++;}
+    const limit=clip*n/bins;let excess=0;
+    for(let b=0;b<bins;b++){if(h[b]>limit){excess+=h[b]-limit;h[b]=limit;}}
+    const inc=excess/bins;for(let b=0;b<bins;b++)h[b]+=inc;
+    const cdf=new Float32Array(bins);let c=0;for(let b=0;b<bins;b++){c+=h[b];cdf[b]=c;}
+    const tot=cdf[bins-1]||1;for(let b=0;b<bins;b++)cdf[b]=cdf[b]/tot;
+    maps.push(cdf);
+  }
+  const out=new Float32Array(a.length);
+  for(let y=0;y<H;y++)for(let x=0;x<W;x++){
+    const fx=(x/tw)-0.5,fy=(y/th)-0.5;
+    let tx0=Math.floor(fx),ty0=Math.floor(fy);
+    const dx=fx-tx0,dy=fy-ty0;
+    const cx0=Math.min(nx-1,Math.max(0,tx0)),cx1=Math.min(nx-1,Math.max(0,tx0+1));
+    const cy0=Math.min(ny-1,Math.max(0,ty0)),cy1=Math.min(ny-1,Math.max(0,ty0+1));
+    const bi=Math.min(bins-1,(a[y*W+x]*(bins-1))|0);
+    const m00=maps[cy0*nx+cx0][bi],m10=maps[cy0*nx+cx1][bi],m01=maps[cy1*nx+cx0][bi],m11=maps[cy1*nx+cx1][bi];
+    const top=m00+(m10-m00)*dx,bot=m01+(m11-m01)*dx;
+    out[y*W+x]=top+(bot-top)*dy;
+  }
+  return out}
+function resizeLoss(a,sz){                // downsample→upsample, rezolyutsiya yo'qolishini simulyatsiya
+  const scale=parseInt(sz,10)/1280*W/W; // nisbiy: 1280 baza
+  const dw=Math.max(8,Math.round(W*(parseInt(sz,10)/1280)));
+  const dh=Math.max(8,Math.round(H*(parseInt(sz,10)/1280)));
+  if(dw>=W)return a;
+  const small=new Float32Array(dw*dh);
+  for(let y=0;y<dh;y++)for(let x=0;x<dw;x++){
+    const sx=(x/dw*W)|0,sy=(y/dh*H)|0;let s=0,c=0;
+    const ex=((x+1)/dw*W)|0,ey=((y+1)/dh*H)|0;
+    for(let yy=sy;yy<Math.max(sy+1,ey);yy++)for(let xx=sx;xx<Math.max(sx+1,ex);xx++){s+=a[yy*W+xx];c++;}
+    small[y*dw+x]=s/c;
+  }
+  const out=new Float32Array(a.length); // nearest upsample (blok effekt)
+  for(let y=0;y<H;y++)for(let x=0;x<W;x++){out[y*W+x]=small[((y/H*dh)|0)*dw+((x/W*dw)|0)];}
+  return out}
+
+function removePectoral(a){               // MLO yuqori-chap uchburchak yorqin muskulни maskalash
+  const out=Float32Array.from(a);
+  for(let y=0;y<H*0.55;y++)for(let x=0;x<W;x++){
+    if(x < W*0.46 - y*0.42 && a[y*W+x] > 0.36) out[y*W+x]=0.02;
+  }
+  return out}
+function augment(a,flip,rotDeg,bright){   // train-time: flip + rotatsiya + yorug'lik
+  const out=new Float32Array(a.length);
+  const rad=rotDeg*Math.PI/180, cs=Math.cos(rad), sn=Math.sin(rad), cx=W/2, cy=H/2;
+  for(let y=0;y<H;y++)for(let x=0;x<W;x++){
+    const dx=x-cx, dy=y-cy;
+    let sx=cs*dx+sn*dy+cx, sy=-sn*dx+cs*dy+cy;
+    if(flip) sx=W-1-sx;
+    const ix=Math.round(sx), iy=Math.round(sy);
+    const v=(ix>=0&&iy>=0&&ix<W&&iy<H)?a[iy*W+ix]:0.02;
+    out[y*W+x]=Math.min(1,Math.max(0,v+bright));
+  }
+  return out}
+
+let cropBox=null;
+function detectBreast(a){                 // fon threshold → bbox
+  let x0=W,y0=H,x1=0,y1=0;
+  for(let y=0;y<H;y++)for(let x=0;x<W;x++){if(a[y*W+x]>0.12){if(x<x0)x0=x;if(y<y0)y0=y;if(x>x1)x1=x;if(y>y1)y1=y;}}
+  if(x1<x0)return null;return {x0,y0,x1,y1}}
+
+// ---------- to'liq pipeline ----------
+let metricSource=null;                     // metrikalar augmentatsiyadan OLDIN hisoblanadi
+function runPipeline(){
+  let a=clone(RAW);
+  if(S.invert.on)invert(a);
+  if(S.window.on)windowing(a,S.window.wc,S.window.ww);
+  if(S.norm.on)normalize(a,S.norm.mode);
+  if(S.gamma.on)gamma(a,S.gamma.g);
+  if(S.clahe.on)a=clahe(a,S.clahe.clip,S.clahe.tiles);
+  if(S.denoise.on)boxblur(a,S.denoise.amt);
+  if(S.pectoral.on)a=removePectoral(a);
+  cropBox = S.crop.on ? detectBreast(a) : null;
+  if(S.resize.on)a=resizeLoss(a,S.resize.sz);
+  metricSource=a;
+  if(S.augment.on)a=augment(a,S.augment.flip==='1',parseFloat(S.augment.rot),parseFloat(S.augment.bright));
+  return a}
+
+// ---------- chizish ----------
+function toImageData(a,ctx){const im=ctx.createImageData(W,H);for(let i=0;i<a.length;i++){const v=Math.max(0,Math.min(255,a[i]*255))|0;im.data[i*4]=v;im.data[i*4+1]=v;im.data[i*4+2]=v;im.data[i*4+3]=255;}return im}
+function drawHist(raw,out){
+  const w=hist.width,h=hist.height;hx.clearRect(0,0,w,h);
+  const bins=96;const hr=new Float32Array(bins),ho=new Float32Array(bins);
+  for(const v of raw)hr[Math.min(bins-1,(v*bins)|0)]++;
+  for(const v of out)ho[Math.min(bins-1,(v*bins)|0)]++;
+  let mx=1;for(let i=0;i<bins;i++){if(hr[i]>mx)mx=hr[i];if(ho[i]>mx)mx=ho[i];}
+  const bw=w/bins;
+  const cs=getComputedStyle(document.body);
+  const faint=cs.getPropertyValue('--faint').trim(), acc=cs.getPropertyValue('--accent').trim();
+  // asl
+  hx.fillStyle=faint+'66';for(let i=0;i<bins;i++){const bh=Math.pow(hr[i]/mx,.7)*(h-6);hx.fillRect(i*bw,h-bh,bw-0.5,bh);}
+  // ishlov berilgan
+  hx.fillStyle=acc;hx.globalAlpha=.55;for(let i=0;i<bins;i++){const bh=Math.pow(ho[i]/mx,.7)*(h-6);hx.fillRect(i*bw,h-bh,bw-0.5,bh);}
+  hx.globalAlpha=1;
+}
+// ---------- metrikalar ----------
+function regionMean(a,cx,cy,r){let s=0,c=0;for(let y=-r;y<=r;y++)for(let x=-r;x<=r;x++){const px=(cx+x)|0,py=(cy+y)|0;if(px<0||py<0||px>=W||py>=H)continue;if(x*x+y*y>r*r)continue;s+=a[py*W+px];c++;}return s/Math.max(1,c)}
+function regionPeak(a,cx,cy,r){let mx=0;for(let y=-r;y<=r;y++)for(let x=-r;x<=r;x++){const px=(cx+x)|0,py=(cy+y)|0;if(px<0||py<0||px>=W||py>=H)continue;if(a[py*W+px]>mx)mx=a[py*W+px];}return mx}
+function regionStd(a,cx,cy,r){let m=regionMean(a,cx,cy,r),s=0,c=0;for(let y=-r;y<=r;y++)for(let x=-r;x<=r;x++){const px=(cx+x)|0,py=(cy+y)|0;if(px<0||py<0||px>=W||py>=H)continue;s+=(a[py*W+px]-m)**2;c++;}return Math.sqrt(s/Math.max(1,c))}
+function metrics(a){
+  const massIn=regionMean(a,MASS.x,MASS.y,MASS.r*0.6);
+  const massRing=regionMean(a,MASS.x,MASS.y+MASS.r*1.5,MASS.r*0.5);
+  const massC=Math.min(1,Math.abs(massIn-massRing)/0.14);
+  const calcPk=regionPeak(a,CALC.x,CALC.y,CALC.r);
+  const calcBg=regionMean(a,CALC.x,CALC.y,CALC.r);
+  const calcC=Math.min(1,Math.max(0,(calcPk-calcBg)/0.45));
+  const noise=Math.min(1,regionStd(a,W*0.72,H*0.42,14)/0.12); // tekis to'qima sohasi
+  const score=Math.max(0,Math.min(100,(massC*45+calcC*45)-noise*22+10));
+  return {massC,calcC,noise,score}}
+
+// ---------- render ----------
+let raf=0;
+function render(){
+  cancelAnimationFrame(raf);
+  raf=requestAnimationFrame(()=>{
+    ax.putImageData(toImageData(RAW,ax),0,0);
+    const out=runPipeline();
+    bx.putImageData(toImageData(out,bx),0,0);
+    // crop bbox overlay
+    if(cropBox){bx.strokeStyle=getComputedStyle(document.body).getPropertyValue('--accent').trim();bx.lineWidth=1.5;bx.setLineDash([5,4]);bx.strokeRect(cropBox.x0,cropBox.y0,cropBox.x1-cropBox.x0,cropBox.y1-cropBox.y0);bx.setLineDash([]);}
+    drawHist(RAW,out);
+    const m=metrics(metricSource||out);
+    $('scoreN').textContent=Math.round(m.score);
+    $('scoreN').style.color = m.score>62?'var(--good)':m.score>40?'var(--warn)':'var(--crit)';
+    $('scoreTxt').textContent = m.score>62?'Lezyonlar yaxshi ajralib turibdi — train uchun kuchli':m.score>40?'O\'rtacha — ba\'zi lezyonlar zaif ko\'rinadi':'Zaif — lezyonlar yashiringan yoki shovqinга ko\'milgan';
+    setBar('bMass','mMass',m.massC);setBar('bCalc','mCalc',m.calcC);
+    $('bNoise').style.width=(m.noise*100)+'%';$('mNoise').textContent=Math.round(m.noise*100)+'%';
+    $('dims').textContent=W+'×'+H+(S.resize.on?' · resize '+S.resize.sz:'');
+  });
+}
+function setBar(bar,lbl,v){$(bar).style.width=(v*100)+'%';$(lbl).textContent=Math.round(v*100)+'%';}
+
+// ---------- UI qurish ----------
+function buildSteps(){
+  const c=$('steps');c.innerHTML='';
+  STEPS.forEach((s,i)=>{
+    const d=document.createElement('div');d.className='step'+(S[s.id].on?' active':'')+(S[s.id].open?' open':'');
+    d.dataset.id=s.id;
+    let ph='';
+    s.params.forEach(p=>{
+      if(p.type==='select'){
+        ph+=`<div class="ctl"><label>${p.l}</label><select data-p="${p.k}">`+
+          p.opts.map(o=>`<option value="${o[0]}"${S[s.id][p.k]===o[0]?' selected':''}>${o[1]}</option>`).join('')+`</select></div>`;
+      }else{
+        ph+=`<div class="ctl"><label>${p.l}</label><input type="range" data-p="${p.k}" min="${p.min}" max="${p.max}" step="${p.step}" value="${S[s.id][p.k]}"><output data-o="${p.k}">${S[s.id][p.k]}</output></div>`;
+      }
+    });
+    d.innerHTML=`<div class="step-h"><span class="num">${String(i+1).padStart(2,'0')}</span>
+      <button class="sw${S[s.id].on?' on':''}" aria-label="yoqish/o'chirish"></button>
+      <span class="step-name">${s.name}<small>${s.sub}</small></span></div>
+      <div class="params">${ph}</div>`;
+    // toggle
+    d.querySelector('.sw').addEventListener('click',e=>{e.stopPropagation();S[s.id].on=!S[s.id].on;S[s.id].open=S[s.id].on&&s.params.length>0;buildSteps();render();});
+    // ochish/yopish
+    d.querySelector('.step-name').addEventListener('click',()=>{if(S[s.id].on){S[s.id].open=!S[s.id].open;buildSteps();}});
+    // params
+    d.querySelectorAll('input[type=range]').forEach(inp=>{
+      inp.addEventListener('input',()=>{S[s.id][inp.dataset.p]=parseFloat(inp.value);d.querySelector(`[data-o="${inp.dataset.p}"]`).textContent=inp.value;render();});
+    });
+    d.querySelectorAll('select').forEach(sel=>{sel.addEventListener('change',()=>{S[s.id][sel.dataset.p]=sel.value;render();});});
+    c.appendChild(d);
+  });
+}
+
+// ---------- ta'lim kartalari ----------
+const CARDS=[
+  {k:'01 · PHOTOMETRIC',n:'Invert (MONOCHROME1)',ic:'◑',
+   p:'Ba\'zi DICOM\'lar teskari kulrang (oq=havo). Ularni MONOCHROME2\'ga aylantirmasa, model bir xil lezyonни ikki xil ko\'radi.',
+   e:'<b>Natija:</b> aralash polaritet → chalkash train, recall pasayadi.',chips:[['warn','majburiy tekshirish'],['up','izchillik']]},
+  {k:'02 · WINDOWING',n:'VOI LUT / Window',ic:'▭',
+   p:'16-bit intensivlikni ko\'rinadigan diapazonga solish. Noto\'g\'ri window yumshoq massani fonга singdiradi.',
+   e:'<b>Natija:</b> to\'g\'ri WC/WW → yumshoq to\'qima kontrasti; noto\'g\'ri → lezyon yo\'qoladi.',chips:[['up','massa ko\'rinishi'],['warn','fayl-bo\'yicha farq']]},
+  {k:'03 · NORMALIZE',n:'Normalizatsiya',ic:'∿',
+   p:'Persentil (1–99%) autliyerlarни kesadi va [0,1]\'ga cho\'zadi. Batch bo\'ylab bir xil taqsimot beradi.',
+   e:'<b>Natija:</b> tezroq konvergensiya, yaxshi generalizatsiya. Min-max autliyerга sezgir.',chips:[['up','barqaror train'],['up','mAP']]},
+  {k:'04 · CLAHE',n:'Lokal kontrast tenglash',ic:'▚',
+   p:'Mammografiyada standart. Mayda kalsifikatlar va yumshoq massalarни ochadi. Clip juda baland → shovqin kuchayadi.',
+   e:'<b>Natija:</b> mo\'tadil (2–3) → recall↑. Haddan tashqari → soxta pozitivlar↑.',chips:[['up','mikrokalsifikat'],['dn','shovqin (baland clip)']]},
+  {k:'05 · DENOISE',n:'Shovqin kamaytirish',ic:'◍',
+   p:'Yengil Gauss sensor shovqinini kamaytiradi. Kuchli bo\'lsa — mayda kalsifikatlar ham silliqlanib yo\'qoladi.',
+   e:'<b>Natija:</b> ozgina → toza; ko\'p → mikro-lezyon yo\'qoladi, recall↓.',chips:[['up','toza fon'],['dn','mayda detal (kuchli)']]},
+  {k:'06 · PECTORAL',n:'Pektoral muskul olib tashlash',ic:'◤',
+   p:'MLO ko\'rinishida yuqori-chapдаgi yorqin uchburchak muskul. U yuqori intensivligi bilan normalizatsiya va CLAHE\'ni buzadi, soxta deteksiya beradi.',
+   e:'<b>Natija:</b> olib tashlansa → normalizatsiya barqaror, soxta pozitiv↓, ayniqsa ko\'krak-devor yaqinидаgi lezyonlar aniqroq.',chips:[['up','toza normalizatsiya'],['dn','soxta pozitiv'],['warn','faqat MLO']]},
+  {k:'07 · SEGMENT',n:'Ko\'krak segmentatsiyasi',ic:'⬒',
+   p:'Fon, yorliqlar, marker va artefaktlarни chiqarish. Rezolyutsiya faqat ko\'krakка sarflanadi.',
+   e:'<b>Natija:</b> teglar soxta belgi bermaydi; effektiv rezolyutsiya↑ → mAP↑.',chips:[['up','samarali piksel'],['dn','soxta pozitiv']]},
+  {k:'08 · RESIZE',n:'Rezolyutsiya / o\'lcham',ic:'▦',
+   p:'Mikrokalsifikatlar 1–2 piksel. Kichik o\'lchamга siqilsa — butunlay yo\'qoladi.',
+   e:'<b>Natija:</b> 1280 → mayda belgilar saqlanadi (sekinroq). 640 → kalsifikat recall keskin↓.',chips:[['up','mayda lezyon (katta)'],['warn','tezlik/xotira']]},
+  {k:'09 · OUTPUT',n:'8-bit · PNG',ic:'▧',
+   p:'YOLO 8-bit kutadi. PNG (lossless) — JPEG artefaktlari mayda belgilarни buzadi.',
+   e:'<b>Natija:</b> PNG → toza belgi; JPEG → mikrokalsifikat atrofида blok artefakt.',chips:[['up','lossless'],['dn','JPEG artefakt']]},
+  {k:'10 · AUGMENT',n:'Augmentatsiya (train-time)',ic:'⟳',
+   p:'Flip, kichik rotatsiya, yorug\'lik/kontrast jitter — datasetга yozilmaydi, train paytida qo\'llanadi. Ma\'lumot xilma-xilligini oshiradi.',
+   e:'<b>Natija:</b> mo\'tadil → overfitting↓, generalizatsiya↑. Haddan tashqari (katta rotatsiya) → anatomiya buziladi, recall↓.',chips:[['up','generalizatsiya'],['warn','mo\'tadil bo\'lsin'],['neu','datasetга yozilmaydi']]},
+];
+function buildCards(){
+  $('cards').innerHTML=CARDS.map(c=>`<div class="card">
+    <div class="k">${c.k}</div>
+    <h3><span style="color:var(--accent)">${c.ic}</span> ${c.n}</h3>
+    <p>${c.p}</p>
+    <div class="eff">${c.e}</div>
+    <div class="chips">${c.chips.map(ch=>`<span class="chip ${ch[0]}">${ch[1]}</span>`).join('')}</div>
+  </div>`).join('');
+}
+const FLOW=[['RAW','DICOM','16-bit pikseldata'],['01','Invert','polaritet'],['02','Window','VOI LUT'],['03','Normalize','persentil'],['04','CLAHE','clip 2–3'],['05','Segment','ko\'krak'],['06','Resize','1280'],['07','8-bit PNG','YOLO']];
+function buildFlow(){$('flow').innerHTML=FLOW.map(f=>`<div class="node"><div class="n">${f[0]}</div><div class="t">${f[1]}</div><div class="d">${f[2]}</div></div>`).join('');}
+
+// ---------- rasm yuklash ----------
+$('up').addEventListener('change',e=>{
+  const f=e.target.files[0];if(!f)return;const img=new Image();
+  img.onload=()=>{
+    const tc=document.createElement('canvas');tc.width=W;tc.height=H;const tx=tc.getContext('2d');
+    // nisbat saqlab, markazга
+    const s=Math.min(W/img.width,H/img.height);const dw=img.width*s,dh=img.height*s;
+    tx.fillStyle='#000';tx.fillRect(0,0,W,H);tx.drawImage(img,(W-dw)/2,(H-dh)/2,dw,dh);
+    const d=tx.getImageData(0,0,W,H).data;RAW=new Float32Array(W*H);
+    for(let i=0;i<W*H;i++)RAW[i]=(0.299*d[i*4]+0.587*d[i*4+1]+0.114*d[i*4+2])/255;
+    usingSynthetic=false;$('srcSyn').classList.remove('on');render();
+  };
+  img.src=URL.createObjectURL(f);
+});
+$('srcSyn').addEventListener('click',()=>{RAW=genSynthetic();usingSynthetic=true;$('srcSyn').classList.add('on');render();});
+$('reset').addEventListener('click',()=>{STEPS.forEach(s=>{S[s.id].on=s.on;S[s.id].open=s.open;s.params.forEach(p=>S[s.id][p.k]=p.v)});buildSteps();render();});
+$('allOn').addEventListener('click',()=>{ // tavsiya etilgan preset
+  const pre={invert:true,window:false,norm:true,gamma:false,clahe:true,denoise:false,crop:true,resize:false};
+  Object.keys(pre).forEach(k=>{S[k].on=pre[k];});
+  S.norm.mode='pct';S.clahe.clip=2.4;S.clahe.tiles=8;buildSteps();render();});
+
+// tema
+$('theme').addEventListener('click',()=>{
+  const cur=document.documentElement.getAttribute('data-theme');
+  const next=cur==='dark'?'light':cur==='light'?'dark':(matchMedia('(prefers-color-scheme:dark)').matches?'light':'dark');
+  document.documentElement.setAttribute('data-theme',next);render();
+});
+
+// ---------- init ----------
+RAW=genSynthetic();buildSteps();buildCards();buildFlow();render();
+</script>

@@ -73,6 +73,77 @@
   .ts-mbars .mrow { display: grid; grid-template-columns: 118px 1fr 46px; gap: 6px; align-items: center; margin: 4px 0 }
   .ts-mbars .mtrack { height: 12px; background: var(--panel-2, #2a2f3e); border-radius: 6px; overflow: hidden }
   .ts-mbars .mfill { height: 100%; border-radius: 6px }
+
+  /* ══════════ BOOLFS — Xamdamov: bulcha belgilar ══════════
+     Ataylab boshqa rang (binafsha-siyoh) va boshqa shakl (chap chekkada
+     qalin gradient chiziq, kattaroq radius) — YOLO bo'limlaridan yaqqol ajralsin. */
+  :root { --bf: #a855f7; --bf-2: #6366f1; --bf-dim: #c4b5fd; }
+  .bf-wrap { grid-column: 1 / -1; }
+  .bf-section {
+    position: relative; background: linear-gradient(160deg, rgba(168,85,247,.10), rgba(99,102,241,.05) 60%, transparent);
+    border: 1px solid rgba(168,85,247,.35); border-radius: 14px; padding: 16px 18px 16px 22px;
+    margin-bottom: 16px; overflow: hidden;
+  }
+  .bf-section::before {   /* chap chekkadagi gradient "tasma" — asosiy vizual farq */
+    content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 5px;
+    background: linear-gradient(180deg, var(--bf), var(--bf-2));
+  }
+  .bf-section h2 {
+    font-size: 15px; margin: 0 0 4px; color: var(--bf); border: 0; padding: 0;
+    display: flex; align-items: center; gap: 8px; letter-spacing: .2px;
+  }
+  .bf-sub { font-size: 11.5px; color: var(--bf-dim); opacity: .8; margin: 0 0 12px }
+  .bf-formula {
+    font-family: "Cambria Math", Georgia, serif; font-size: 13px; color: #e9d5ff;
+    background: rgba(99,102,241,.10); border: 1px dashed rgba(168,85,247,.35);
+    border-radius: 8px; padding: 7px 12px; margin: 8px 0; display: inline-block;
+  }
+  .bf-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px }
+  @media (max-width: 980px) { .bf-grid { grid-template-columns: 1fr } }
+  .bf-row { display: grid; grid-template-columns: 150px 1fr; gap: 8px; align-items: center; margin: 7px 0; font-size: 13px }
+  .bf-row label { color: var(--bf-dim); opacity: .85 }
+  .bf-row input, .bf-row select {
+    background: rgba(10,15,28,.75); color: var(--text); border: 1px solid rgba(168,85,247,.30);
+    border-radius: 7px; padding: 5px 9px; width: 100%; font-size: 13px; box-sizing: border-box;
+  }
+  .bf-row input:focus, .bf-row select:focus { outline: none; border-color: var(--bf) }
+  .bf-hint { grid-column: 1/-1; font-size: 11px; color: var(--muted); margin: -4px 0 2px 158px }
+  .bf-btn {
+    background: linear-gradient(135deg, var(--bf), var(--bf-2)); color: #fff; border: 0;
+    padding: 10px 20px; border-radius: 9px; font-size: 14px; font-weight: 600; cursor: pointer;
+    box-shadow: 0 3px 14px rgba(168,85,247,.28);
+  }
+  .bf-btn:disabled { opacity: .45; cursor: not-allowed; box-shadow: none }
+  .bf-btn-ghost {
+    background: transparent; color: var(--bf-dim); border: 1px solid rgba(168,85,247,.4);
+    padding: 8px 14px; border-radius: 9px; cursor: pointer; font-size: 13px;
+  }
+  .bf-btn-stop { background: #7a1f4f; color: #fff; border: 0; padding: 10px 18px; border-radius: 9px; cursor: pointer; font-weight: 600 }
+  .bf-prog { height: 7px; background: rgba(10,15,28,.7); border-radius: 5px; overflow: hidden; margin: 10px 0 4px }
+  .bf-prog i { display: block; height: 100%; background: linear-gradient(90deg, var(--bf-2), var(--bf)); width: 0; transition: width .4s }
+  .bf-log { font-family: monospace; font-size: 11px; background: rgba(10,15,28,.85); color: #d8b4fe;
+    border: 1px solid rgba(168,85,247,.2); padding: 8px 10px; border-radius: 8px; max-height: 190px;
+    overflow: auto; white-space: pre-wrap; margin-top: 8px }
+  .bf-cards { display: flex; gap: 9px; flex-wrap: wrap; margin: 12px 0 6px }
+  .bf-card { flex: 1; min-width: 92px; background: rgba(99,102,241,.10); border: 1px solid rgba(168,85,247,.28);
+    border-radius: 10px; padding: 9px 7px; text-align: center }
+  .bf-card .v { font-size: 19px; font-weight: 700; color: #e9d5ff; line-height: 1.15 }
+  .bf-card .l { font-size: 10px; color: var(--muted); margin-top: 3px }
+  .bf-card.win { background: rgba(34,197,94,.12); border-color: rgba(34,197,94,.4) }
+  .bf-card.win .v { color: #4ade80 }
+  .bf-tbl { width: 100%; border-collapse: collapse; font-size: 12px; margin-top: 6px }
+  .bf-tbl th, .bf-tbl td { padding: 5px 8px; border-bottom: 1px solid rgba(168,85,247,.15); text-align: left }
+  .bf-tbl th { color: var(--bf-dim); font-weight: 600; background: rgba(99,102,241,.10) }
+  .bf-tbl tr:hover td { background: rgba(168,85,247,.06) }
+  .bf-tbl td.num { text-align: right; font-variant-numeric: tabular-nums }
+  .bf-best td { background: rgba(34,197,94,.10) !important; color: #4ade80; font-weight: 600 }
+  .bf-runs { max-height: 210px; overflow: auto }
+  .bf-runs tr { cursor: pointer }
+  .bf-fig { max-width: 100%; border-radius: 10px; border: 1px solid rgba(168,85,247,.25); margin: 8px 0; display: block }
+  .bf-badge { display: inline-block; background: rgba(168,85,247,.18); color: var(--bf-dim);
+    border: 1px solid rgba(168,85,247,.3); padding: 1px 8px; border-radius: 20px; font-size: 10.5px }
+  .bf-st-done { color: #4ade80 } .bf-st-failed { color: #ef4444 }
+  .bf-st-running { color: var(--bf) } .bf-st-stopped, .bf-st-interrupted { color: #f59e0b }
 </style>
 </head>
 <body>
@@ -299,7 +370,7 @@
       <div id="cmpResult" style="font-size:12px"></div>
     </div>
 
-    <div class="ts-section">
+    <div class="ts-section" id="tipsSection">
       <h2>💡 Maslahat</h2>
       <ul style="font-size:12px;color:var(--muted);padding-left:18px;margin:0">
         <li><strong>Yangi data</strong>: yolo11n + pretrained ✓ + epochs=50 — eng tez sinov</li>
@@ -312,8 +383,104 @@
     </div>
   </div>
 
+  <!-- ══════════════════════════════════════════════════════════════════
+       BOOLFS — Xamdamov: bulcha dasturlash asosida informativ belgilar
+       (ikkinchi bosqich klassifikator + YOLO ansambli)
+       ══════════════════════════════════════════════════════════════════ -->
+  <div class="bf-wrap">
+
+    <div class="bf-section">
+      <h2>🧮 Xamdamov usuli — bulcha belgilar tanlash <span class="bf-badge">2-bosqich klassifikator</span></h2>
+      <p class="bf-sub">
+        R.X. Xamdamov, «Задачи, модели и методы булева программирования» (Toshkent, 2017), III bob va 3.6-bo'lim.
+        YOLO faqat ROI'ni topadi; sinf esa 38 ta radiomika belgisidan tanlangan informativ qism-to'plam bo'yicha
+        minimal masofa qoidasi bilan qayta baholanadi va YOLO skori bilan ansambl qilinadi.
+      </p>
+      <div class="bf-formula">Ф(λ) = Σ a<sub>j</sub>λ<sub>j</sub> / Σ (b<sub>j</sub>+c<sub>j</sub>)λ<sub>j</sub> → max, λ<sub>j</sub> ∈ {0,1}</div>
+      <div class="bf-formula">ρ<sub>p</sub>(x) = Σ λ<sub>j</sub>(x<sub>j</sub> − x̄<sup>p</sup><sub>j</sub>)² / S(X<sub>p</sub>) &nbsp;→&nbsp; sinf(x) = argmin<sub>p</sub> ρ<sub>p</sub>(x)</div>
+      <div class="bf-formula">z<sub>p</sub> = α·YOLO<sub>p</sub> + (1−α)·s<sub>p</sub></div>
+
+      <div class="bf-grid" style="margin-top:14px">
+        <!-- Konfiguratsiya -->
+        <div>
+          <div class="bf-row">
+            <label>Dataset (data.yaml)</label>
+            <select id="bfDataset"><option value="">— yuklanmoqda —</option></select>
+          </div>
+          <div class="bf-row">
+            <label>YOLO modeli</label>
+            <select id="bfWeights"><option value="">— ansamblsiz (faqat boolfs) —</option></select>
+          </div>
+          <div class="bf-hint">Ansambl uchun 8-sinfli o'qitilgan model tanlang. Har xil modellarni sinab, natijalarni solishtiring.</div>
+          <div class="bf-row">
+            <label>α (YOLO ulushi)</label>
+            <input type="number" id="bfAlpha" value="0.5" step="0.1" min="0" max="1" />
+          </div>
+          <div class="bf-hint">0.3 / 0.5 / 0.7 va 0 / 1 baribir hisoblanadi — jadvalda solishtiriladi.</div>
+          <div class="bf-row">
+            <label>n* (belgilar soni)</label>
+            <input type="number" id="bfNstar" value="0" min="0" max="38" />
+          </div>
+          <div class="bf-hint">0 = P(n′) maksimumi bo'yicha avtomatik tanlansin (tavsiya).</div>
+        </div>
+        <div>
+          <div class="bf-row">
+            <label>Baholash bo'linmasi</label>
+            <select id="bfSplit"><option value="val" selected>val</option><option value="train">train</option></select>
+          </div>
+          <div class="bf-row">
+            <label>CV foldlar</label>
+            <select id="bfFolds">
+              <option value="3">3</option><option value="5" selected>5</option><option value="10">10</option>
+            </select>
+          </div>
+          <div class="bf-hint">Kam misolli sinflar baribir leave-one-out bilan baholanadi.</div>
+          <div class="bf-row">
+            <label>Detektsiya conf</label>
+            <input type="number" id="bfConf" value="0.05" step="0.01" min="0.01" max="0.9" />
+          </div>
+          <div class="bf-row">
+            <label>Moslash IoU</label>
+            <input type="number" id="bfIou" value="0.3" step="0.05" min="0.1" max="0.9" />
+          </div>
+          <div class="bf-row">
+            <label>Izoh (sinov nomi)</label>
+            <input type="text" id="bfNote" placeholder="mas. yolo11s + alpha 0.7" />
+          </div>
+        </div>
+      </div>
+
+      <div style="display:flex;gap:10px;align-items:center;margin-top:14px;flex-wrap:wrap">
+        <button class="bf-btn" id="bfRunBtn">▶ Sinovni boshlash</button>
+        <button class="bf-btn-stop" id="bfStopBtn" hidden>⏹ To'xtatish</button>
+        <button class="bf-btn-ghost" id="bfRefreshBtn">↻ Sinovlar ro'yxati</button>
+        <span class="ts-status" id="bfStatus"></span>
+      </div>
+      <div class="bf-prog" id="bfProgWrap" hidden><i id="bfProg"></i></div>
+      <div class="bf-log" id="bfLog" hidden></div>
+    </div>
+
+    <div class="bf-section">
+      <h2>📊 Sinov natijalari</h2>
+      <p class="bf-sub">Sinovni tanlang — ranjirlangan qator, Ф(n′)/P(n′) egri chizig'i, ajraluvchanlik matritsasi va ansambl taqqoslash.</p>
+      <div class="bf-grid">
+        <div>
+          <div style="font-size:12px;color:var(--bf-dim);margin-bottom:4px">Sinovlar tarixi</div>
+          <div class="bf-runs"><table class="bf-tbl" id="bfRunsTable"><tr><td>yuklanmoqda…</td></tr></table></div>
+        </div>
+        <div>
+          <div id="bfSummary" class="bf-cards"></div>
+          <div id="bfAlphaTable"></div>
+        </div>
+      </div>
+      <div id="bfResult" style="margin-top:14px"></div>
+    </div>
+
+  </div>
+
 </div>
 
 <script src="train.js"></script>
+<script src="boolfs.js"></script>
 </body>
 </html>
