@@ -293,3 +293,21 @@ Endi dev → prod deploy xavfsiz (dev to'liq superset).
   `scripts/make_maqola_exp2026.py` (3 tilli matn + grafiklar + docx).
 - Barcha sonlar `runs/exp_20260710/*/`.json dan avtomatik o'qiladi (qo'lda kiritilmagan).
 - Build: `docker run --rm -v $PWD:/work -w /work mamograf-prod-app sh -c "pip install -q python-docx && python scripts/make_maqola_exp2026.py"`
+
+### 9.3. 📘 Dissertatsiyaga yangi bob qo'shildi (bulcha ansambl)
+- **"II bob (davomi). Bulcha dasturlash asosida informativ belgilarni tanlash va
+  interpretatsiyalanadigan gibrid ansambl"** — bob2 dan keyin joylashtirildi, mundarijaga ham.
+- 7 ta paragraf (2.8-§ … 2.14-§), 13 tenglama ((2.15)–(2.27)), 5 jadval (2.5–2.9),
+  2 rasm (2.5–2.6), bob xulosalari (5 band).
+- Formulalar **Word native OMML** (dissertatsiyaning qolgan qismi hali LaTeX→PNG).
+- Modul: `scripts/dissertatsiya_bob_boolfs.py`; u `make_maqola_exp2026.py` dan sonlarni,
+  `maqola_formulalar.py` dan tenglamalarni oladi (dublikat matn yo'q).
+- `scripts/make_dissertatsiya_phd.py` ga: `img_path()` yordamchisi + `@section bob2a_boolfs` + mundarija.
+- Ma'lumot: `runs/exp_20260710/` va `doc_assets_exp2026/` mamograf_yangilash_21-iyun'dan ko'chirildi.
+- Zaxira: `backups/MAMOGRAF_PhD_dissertatsiya_BEFORE_boolfs_20260710.docx`.
+- Hajm: 14 676 so'z, 11 jadval, 102 rasm.
+
+> ⚠️ **Aniqlangan eski nuqson (tuzatilmagan):** dissertatsiya matnida 80 ta xom LaTeX bo'lagi
+> ko'rinib turibdi (`$\mathrm{softplus}$`, `$f_{deep}$`, `$F_v^{(s)}$` …) — `para()` satr ichidagi
+> matematikani render qilmaydi. Bu yangi bobga taalluqli emas (unda 0 ta). Tuzatish uchun satr ichi
+> matematikani OMML'ga o'tkazish kerak.

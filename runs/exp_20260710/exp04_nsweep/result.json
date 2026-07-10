@@ -1,0 +1,94 @@
+{
+ "data": "datasets/d_dataset_mamagrammav445/data.yaml",
+ "n_list": [
+  3,
+  5,
+  8,
+  13,
+  21,
+  28,
+  34,
+  38
+ ],
+ "rows": [
+  {
+   "n": 3,
+   "P_cv": 0.48940269749518306,
+   "P_val": 0.5675675675675675,
+   "features": [
+    "glcm_d1_correlation",
+    "glcm_d3_correlation",
+    "grad_sobel_std"
+   ]
+  },
+  {
+   "n": 5,
+   "P_cv": 0.4624277456647399,
+   "P_val": 0.5540540540540541,
+   "features": [
+    "glcm_d1_correlation",
+    "glcm_d3_correlation",
+    "grad_sobel_std",
+    "glcm_d1_dissimilarity",
+    "glcm_d3_dissimilarity"
+   ]
+  },
+  {
+   "n": 8,
+   "P_cv": 0.4797687861271676,
+   "P_val": 0.5878378378378378,
+   "features": [
+    "glcm_d1_correlation",
+    "glcm_d3_correlation",
+    "grad_sobel_std",
+    "glcm_d1_dissimilarity",
+    "glcm_d3_dissimilarity",
+    "glcm_d1_contrast",
+    "grad_sobel_mean",
+    "int_skew"
+   ]
+  },
+  {
+   "n": 13,
+   "P_cv": 0.49710982658959535,
+   "P_val": 0.6013513513513513,
+   "features": null
+  },
+  {
+   "n": 21,
+   "P_cv": 0.4951830443159923,
+   "P_val": 0.5878378378378378,
+   "features": null
+  },
+  {
+   "n": 28,
+   "P_cv": 0.5144508670520231,
+   "P_val": 0.5878378378378378,
+   "features": null
+  },
+  {
+   "n": 34,
+   "P_cv": 0.5260115606936416,
+   "P_val": 0.6283783783783784,
+   "features": null
+  },
+  {
+   "n": 38,
+   "P_cv": 0.5202312138728323,
+   "P_val": 0.6148648648648649,
+   "features": null
+  }
+ ],
+ "ranking_top10": [
+  "glcm_d1_correlation",
+  "glcm_d3_correlation",
+  "grad_sobel_std",
+  "glcm_d1_dissimilarity",
+  "glcm_d3_dissimilarity",
+  "glcm_d1_contrast",
+  "grad_sobel_mean",
+  "int_skew",
+  "glcm_d3_contrast",
+  "int_kurtosis"
+ ]
+}

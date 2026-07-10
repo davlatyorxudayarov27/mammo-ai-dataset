@@ -1,0 +1,147 @@
+{
+ "split": "val",
+ "P": 0.6283783783783784,
+ "n_roi": 148,
+ "confusion": [
+  [
+   3,
+   0,
+   0,
+   0,
+   2,
+   2,
+   0,
+   0
+  ],
+  [
+   2,
+   0,
+   0,
+   0,
+   1,
+   1,
+   0,
+   0
+  ],
+  [
+   0,
+   0,
+   0,
+   0,
+   0,
+   0,
+   0,
+   0
+  ],
+  [
+   0,
+   0,
+   0,
+   3,
+   1,
+   0,
+   2,
+   0
+  ],
+  [
+   3,
+   0,
+   0,
+   0,
+   57,
+   0,
+   1,
+   0
+  ],
+  [
+   13,
+   0,
+   0,
+   0,
+   12,
+   22,
+   4,
+   0
+  ],
+  [
+   1,
+   1,
+   0,
+   3,
+   4,
+   2,
+   8,
+   0
+  ],
+  [
+   0,
+   0,
+   0,
+   0,
+   0,
+   0,
+   0,
+   0
+  ]
+ ],
+ "class_names": [
+  "BIRADS12",
+  "BIRADS45",
+  "architectural_distortion",
+  "asymmetry",
+  "calcification",
+  "lymph_node",
+  "mass",
+  "other"
+ ],
+ "per_class": [
+  {
+   "class": "BIRADS12",
+   "support": 7,
+   "precision": 0.1364,
+   "recall": 0.4286
+  },
+  {
+   "class": "BIRADS45",
+   "support": 4,
+   "precision": 0.0,
+   "recall": 0.0
+  },
+  {
+   "class": "architectural_distortion",
+   "support": 0,
+   "precision": 0.0,
+   "recall": 0.0
+  },
+  {
+   "class": "asymmetry",
+   "support": 6,
+   "precision": 0.5,
+   "recall": 0.5
+  },
+  {
+   "class": "calcification",
+   "support": 61,
+   "precision": 0.7403,
+   "recall": 0.9344
+  },
+  {
+   "class": "lymph_node",
+   "support": 51,
+   "precision": 0.8148,
+   "recall": 0.4314
+  },
+  {
+   "class": "mass",
+   "support": 19,
+   "precision": 0.5333,
+   "recall": 0.4211
+  },
+  {
+   "class": "other",
+   "support": 0,
+   "precision": 0.0,
+   "recall": 0.0
+  }
+ ]
+}

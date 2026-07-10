@@ -1,0 +1,291 @@
+{
+ "split": "val",
+ "iou_thr": 0.3,
+ "conf_thr": 0.05,
+ "n_matched": 103,
+ "n_pred": 325,
+ "n_gt": 163,
+ "weights": "trained_8class_ai_v2_ep50.pt",
+ "alpha_results": {
+  "0.0": 0.5825242718446602,
+  "0.3": 0.8640776699029126,
+  "0.5": 0.8640776699029126,
+  "0.7": 0.8543689320388349,
+  "1.0": 0.8349514563106796
+ },
+ "best_alpha": 0.3,
+ "confusion_yolo": [
+  [
+   0,
+   0,
+   0,
+   0,
+   0,
+   5,
+   0,
+   0
+  ],
+  [
+   0,
+   2,
+   0,
+   0,
+   0,
+   2,
+   0,
+   0
+  ],
+  [
+   0,
+   0,
+   0,
+   0,
+   0,
+   0,
+   0,
+   0
+  ],
+  [
+   0,
+   0,
+   0,
+   1,
+   0,
+   0,
+   1,
+   0
+  ],
+  [
+   3,
+   0,
+   0,
+   0,
+   28,
+   0,
+   0,
+   0
+  ],
+  [
+   3,
+   0,
+   0,
+   0,
+   0,
+   44,
+   0,
+   0
+  ],
+  [
+   1,
+   0,
+   0,
+   0,
+   0,
+   2,
+   11,
+   0
+  ],
+  [
+   0,
+   0,
+   0,
+   0,
+   0,
+   0,
+   0,
+   0
+  ]
+ ],
+ "confusion_ensemble": [
+  [
+   0,
+   0,
+   0,
+   0,
+   1,
+   4,
+   0,
+   0
+  ],
+  [
+   0,
+   2,
+   0,
+   0,
+   0,
+   2,
+   0,
+   0
+  ],
+  [
+   0,
+   0,
+   0,
+   0,
+   0,
+   0,
+   0,
+   0
+  ],
+  [
+   0,
+   0,
+   0,
+   1,
+   0,
+   0,
+   1,
+   0
+  ],
+  [
+   0,
+   0,
+   0,
+   0,
+   30,
+   0,
+   1,
+   0
+  ],
+  [
+   2,
+   0,
+   0,
+   0,
+   0,
+   45,
+   0,
+   0
+  ],
+  [
+   0,
+   0,
+   0,
+   1,
+   0,
+   2,
+   11,
+   0
+  ],
+  [
+   0,
+   0,
+   0,
+   0,
+   0,
+   0,
+   0,
+   0
+  ]
+ ],
+ "per_class_yolo": [
+  {
+   "class": "BIRADS12",
+   "support": 5,
+   "precision": 0.0,
+   "recall": 0.0
+  },
+  {
+   "class": "BIRADS45",
+   "support": 4,
+   "precision": 1.0,
+   "recall": 0.5
+  },
+  {
+   "class": "architectural_distortion",
+   "support": 0,
+   "precision": 0.0,
+   "recall": 0.0
+  },
+  {
+   "class": "asymmetry",
+   "support": 2,
+   "precision": 1.0,
+   "recall": 0.5
+  },
+  {
+   "class": "calcification",
+   "support": 31,
+   "precision": 1.0,
+   "recall": 0.9032
+  },
+  {
+   "class": "lymph_node",
+   "support": 47,
+   "precision": 0.8302,
+   "recall": 0.9362
+  },
+  {
+   "class": "mass",
+   "support": 14,
+   "precision": 0.9167,
+   "recall": 0.7857
+  },
+  {
+   "class": "other",
+   "support": 0,
+   "precision": 0.0,
+   "recall": 0.0
+  }
+ ],
+ "per_class_ensemble": [
+  {
+   "class": "BIRADS12",
+   "support": 5,
+   "precision": 0.0,
+   "recall": 0.0
+  },
+  {
+   "class": "BIRADS45",
+   "support": 4,
+   "precision": 1.0,
+   "recall": 0.5
+  },
+  {
+   "class": "architectural_distortion",
+   "support": 0,
+   "precision": 0.0,
+   "recall": 0.0
+  },
+  {
+   "class": "asymmetry",
+   "support": 2,
+   "precision": 0.5,
+   "recall": 0.5
+  },
+  {
+   "class": "calcification",
+   "support": 31,
+   "precision": 0.9677,
+   "recall": 0.9677
+  },
+  {
+   "class": "lymph_node",
+   "support": 47,
+   "precision": 0.8491,
+   "recall": 0.9574
+  },
+  {
+   "class": "mass",
+   "support": 14,
+   "precision": 0.8462,
+   "recall": 0.7857
+  },
+  {
+   "class": "other",
+   "support": 0,
+   "precision": 0.0,
+   "recall": 0.0
+  }
+ ],
+ "class_names": [
+  "BIRADS12",
+  "BIRADS45",
+  "architectural_distortion",
+  "asymmetry",
+  "calcification",
+  "lymph_node",
+  "mass",
+  "other"
+ ]
+}

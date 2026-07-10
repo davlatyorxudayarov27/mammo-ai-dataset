@@ -180,6 +180,23 @@ def img(doc, name, width=5.6, caption=None):
         r.font.size = Pt(12)
 
 
+def img_path(doc, path, width=5.6, caption=None):
+    """img() bilan bir xil, lekin to'liq yo'l qabul qiladi (ASSETS'dan tashqaridagi rasmlar)."""
+    from pathlib import Path as _P
+    path = _P(path)
+    if not path.exists():
+        return
+    p = doc.add_paragraph()
+    p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    p.add_run().add_picture(str(path), width=Inches(width))
+    if caption:
+        c = doc.add_paragraph()
+        c.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        r = c.add_run(caption)
+        r.italic = True
+        r.font.size = Pt(12)
+
+
 def table(doc, headers, rows, caption=None):
     if caption:
         c = doc.add_paragraph()
@@ -273,6 +290,16 @@ def mundarija(doc):
         ("2.6-§. Multimodal (matn-asosli) detektsiya: TILLNet va matn tasniflagichi", False),
         ("2.7-§. Oʻqitish protseduri, augmentatsiya va giperparametrlar", False),
         ("II bob boʻyicha xulosalar", False),
+        ("II BOB (DAVOMI). BULCHA DASTURLASH ASOSIDA INFORMATIV BELGILARNI TANLASH VA "
+         "INTERPRETATSIYALANADIGAN GIBRID ANSAMBL", True),
+        ("2.8-§. Masalaning qoʻyilishi va belgilar fazosi", False),
+        ("2.9-§. Bulcha belgi tanlash mezoni", False),
+        ("2.10-§. Ranjirlangan qator va prefiks boʻyicha tanlash", False),
+        ("2.11-§. Minimal masofa tasniflagichi", False),
+        ("2.12-§. Gibrid ansambl va sifat mezoni", False),
+        ("2.13-§. Eksperimental tadqiqot natijalari", False),
+        ("2.14-§. Natijalarni muhokama qilish va klinik talqin", False),
+        ("II (davomi) bob boʻyicha xulosalar", False),
         ("III BOB. ALGORITMLARNI AMALGA OSHIRUVCHI DASTURIY MAJMUA", True),
         ("3.1-§. Tizim arxitekturasi, maxfiylik va xavfsizlik", False),
         ("3.2-§. Annotatsiya, faol oʻrganish va AI yordami", False),
@@ -1241,6 +1268,20 @@ def bob2(doc):
         "Kompozit yo'qotish funksiyasi standart YOLO komponentlarini uch yangi regulyarizatsiya bilan birlashtiradi.",
         "Radiomik belgilarni chuqur tasvirlovchilar bilan birlashtirish izohlanuvchanlikni oshiradi; TILLNet va matn tasniflagichi multimodal kengaytmani ta'minlaydi.",
     ])
+    pb(doc)
+
+
+# --------------------------------------------------------------------------- #
+# II bob (davomi) — bulcha belgi tanlash + gibrid ansambl                     #
+# (dissertatsiya_bob_boolfs.py modulidan; formulalar Word native OMML)        #
+# --------------------------------------------------------------------------- #
+@section
+def bob2a_boolfs(doc):
+    import os
+    import sys
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import dissertatsiya_bob_boolfs as bb
+    bb.emit(doc, h1, h2, para, lead, bullets, table, concl, img_path)
     pb(doc)
 
 
