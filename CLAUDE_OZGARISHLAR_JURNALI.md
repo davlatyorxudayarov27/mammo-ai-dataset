@@ -537,3 +537,62 @@ Oltala maqola va dissertatsiya qayta qurildi; xom LaTeX 0, OMML sxema xatosi 0, 
 
 **Saboq:** raqamlar avtomatik tekshiriladi, **ta'riflar esa yo'q**. Metod bo'limidagi har bir
 «N ta shunday belgi» gapini kod bilan (`FEATURE_NAMES`) solishtirish shart.
+
+---
+
+## Sessiya 11 — Q1 (IEEE JBHI) qo'lyozmasi va tashqi validatsiya (2026-07-10)
+
+Foydalanuvchi: ikkala maqolani birlashtirib bitta kuchli qo'lyozma, tashqi validatsiya bilan,
+IEEE JBHI ga.
+
+### Tashqi baza
+`scripts/cbis_download.py` — **CBIS-DDSM** (TCIA, CC BY 3.0) REST API orqali, hisob-ma'lumotsiz.
+Har "ROI mask images" seriyasida `SeriesDescription="cropped images"` DICOM bor — bu kesilgan
+ROI. **3 461 ROI** yuklandi (o'quv 2 770, test 691; 104 seriyada kesim yo'q).
+Sinflar: calcification / mass — bizning taksonomiya bilan kesishadigan yagona ikkitasi.
+
+### Eksperiment zanjiri (har biri oldingisining kamchiligini yopadi)
+
+| Skript | Nima uchun kerak bo'ldi |
+|---|---|
+| `exp30_external_cbis.py` | Uch bazali kelishuv + zero-shot ko'chirish. **Natija: ρ=−0,11, top-8=0** |
+| `exp31_harmonise.py` | ⚠️ exp30 dagi ρ<0 — ILMIY TOPILMA EMAS, oqim nomuvofiqligi edi (pastga qarang). Harmonizatsiya zinapoyasi V0→V3 |
+| `exp32_subset_transfer.py` | ⚠️ exp31 da reyting+kalibrovka birga ko'chirilgan. Faqat BELGILAR to'plamini ko'chirib, tasniflagichni maqsad bazada qayta o'qitish + tasodifiy baza |
+| `exp33_k_sweep.py` | ⚠️ exp32 da k=3–5 juda kichik. own/src/rand egrilarini k∈{3..34} bo'yicha |
+
+**exp30 dagi tuzoq (muhim!):** `cbis_download.py` har bir kesimni ALOHIDA min-max bilan
+0–255 ga keltiradi; bizning ROI'lar esa butun mammogramma bo'yicha normallashtirilgan
+tasvirdan kesiladi. Shuning uchun CBIS reytingini `int_p90/entropy/mean/std/median` egallagan —
+`int_mean` ikki bazada boshqa kattalikni o'lchaydi. Bunga masshtab farqi qo'shiladi
+(GLCM d=1 bizda ≈0,14 mm, CBIS'da ≈0,05 mm) va kesish konvensiyasi (`shape_*`).
+
+### Harmonizatsiya zinapoyasi natijasi (`harmonise.json`)
+
+| Bosqich | ρ | top-3 | top-5 | O→C bacc |
+|---|---|---|---|---|
+| V0 xom | −0,252 | 0,000 | 0,000 | 0,546 |
+| V1 +ROI ichida min-max | −0,055 | 0,000 | 0,200 | 0,503 |
+| V2 +128×128 ga keltirish | +0,030 | 0,000 | 0,200 | 0,509 |
+| V3 −shakl belgilari | −0,032 | 0,000 | 0,200 | 0,509 |
+
+Harmonizatsiya kelishuvni **tiklamadi**. Domen ichida: bizniki bacc 0,95–0,97, CBIS 0,67 —
+ikki bazaning qiyinligi tubdan farq qiladi.
+
+### To'plam-ko'chirish nazorati (`subset_transfer.json`)
+Faqat belgilar to'plami ko'chiriladi, tasniflagich maqsad bazada qayta o'qitiladi.
+`own` >> `src`; `src` tasodifiy to'plamdan yaxshi emas, ko'p bosqichda **yomonroq**
+(persentil 0,04 / 0,08 / 0,10 / 0,12). Ya'ni manba reytingi maqsad domenda ma'lumot bermaydi.
+
+### Qo'lyozma
+`manuscript_jbhi/` — IEEEtran `journal`, kompilyatsiya konteynerda (`texlive/texlive:latest-medium`,
+`IEEEtran.cls/.bst` CTAN'dan). `build.sh` avval raqamlarni JSON'dan qayta quradi.
+
+**Tamoyil: matnda birorta raqam qo'lda terilmaydi** — `make_manuscript_tex.py` barcha sonlarni
+`macros.tex` ga `\newcommand` qilib chiqaradi (87 ta), `.tex` da faqat `\EBacc`, `\AgrThree` …
+
+**LaTeX tuzoqlari:**
+- `texlive:latest-medium` da `multirow`/`siunitx` yo'q (ishlatmang yoki full image oling).
+- `IEEEtran.bst` `biblio/bibtex/contrib/IEEEtran/` da, `macros/latex/contrib/` da EMAS.
+- LaTeX ning `\input` i fayldan keyin ` \relax` qo'shadi → `tabular` ichida
+  "Misplaced \noalign". Yechim: `\makeatletter \newcommand{\inputrows}[1]{\@@input #1.tex }`.
+- `figures_big.py` endi PNG yoniga vektor PDF ham saqlaydi (`_save`).
