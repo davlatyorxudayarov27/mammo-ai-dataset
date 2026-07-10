@@ -464,3 +464,42 @@ Yozilgan matnda **real hisob bilan qoplanmagan uchta da'vo** topildi va yopildi.
 M2 maqolasiga **4.6-bo'lim + 7-jadval** qo'shildi (uch tilda), `d4` cheklovlar bandi va
 xulosaning 6-bandi qayta yozildi. Yakuniy holat: M2 — 7 jadval, 5 rasm, ~3150–3750 so'z,
 159–161 OMML tugun. Oltala hujjatda xom LaTeX 0, OMML sxema xatosi 0, bo'sh tenglama qutisi 0.
+
+### Sessiya 10-b — katta baza natijalari dissertatsiyaga kiritildi
+
+**II bob (davomi-2)** qo'shildi: «Bulcha belgi tanlash usulini katta hajmli bazada tekshirish:
+barqarorlik, ma'lumot sizishi va ansamblning halol bahosi».
+
+| Element | Raqamlash |
+|---|---|
+| Bo'limlar | 2.15-§ … 2.20-§ |
+| Tenglamalar | 2.28 … 2.40 (13 ta, Word-native OMML) |
+| Jadvallar | 2.11 … 2.16 (6 ta) |
+| Rasmlar | 2.10 … 2.15 (6 ta) |
+
+Mazmuni: katta baza protokoli · barqarorlikni o'lchash usuli (Kuncheva/Jaccard/o'rtacha o'rin/
+bazalararo kelishuv) · ikki qatlamli barqarorlik natijasi · ma'lumot sizishini aniqlash va
+nazorat · ansamblning halol bahosi · IoU sezuvchanlik tahlili · P mezonining chegarasi.
+Yakunda «II (davomi-2) bob bo'yicha xulosalar» — 6 band.
+
+Yangi fayl: `scripts/dissertatsiya_bob_boolfs_katta.py`.
+`runs/exp_big_20260710/*.json` + `doc_assets_big/` + maqola modullari repozitoriyga ko'chirildi.
+
+**Generator tuzatishlari (barchasi qayta ishlatiladigan):**
+- `table()` — sarlavha, kataklar va caption endi `$...$` (inline OMML) va `**qalin**` qabul qiladi;
+  ilgari ular xom matn bo'lib chiqardi.
+- `img()` / `img_path()` caption'lari — xuddi shunday.
+- `lead()` — yorliq qismida ham `$...$` ishlaydi (`$P$` xom qolib ketgan edi).
+- `matplotlib` importi endi ixtiyoriy: PNG formulalar diskda bo'lsa host'da ham quriladi.
+
+**Build muhiti (muhim):** host'da `python-docx` bor lekin `PIL`/`matplotlib` yo'q; konteynerda
+teskari. Ikkalasini qoplaydigan kombinatsiya:
+```
+PYTHONPATH=/home/ai/.local/lib/python3.12/site-packages:$PWD/scripts \
+  /home/ai/harakat/venv/bin/python scripts/make_dissertatsiya_phd.py
+```
+`doc_assets/eq/*.png` root-egaligida bo'lsa avval `chown` qiling.
+
+**Yakuniy holat:** 18 519 so'z · 168 OMML tenglama · 18 jadval · 111 rasm ·
+xom LaTeX 0 · OMML sxema xatosi 0 · bo'sh tenglama qutisi 0.
+Zaxira: `backups/MAMOGRAF_PhD_dissertatsiya_BEFORE_katta_baza_20260710.docx`.

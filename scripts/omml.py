@@ -116,6 +116,19 @@ def arg_op(op, under, body):
     return func(limlow(run(op, upright=True), under), body)
 
 
+def rad(body, deg=None):
+    """Ildiz: deg=None → kvadrat ildiz."""
+    pr = _e("m:radPr", _e("m:degHide", **{"m__val": "0" if _has(deg) else "1"}),
+            _e("m:ctrlPr"))
+    return _e("m:rad", pr,
+              _e("m:deg", *_seq(deg)) if _has(deg) else _e("m:deg"), _E(body))
+
+
+def absv(inner):
+    """|inner| — modul/quvvat."""
+    return delim(inner, "|", "|")
+
+
 def add_equation(doc, *nodes, number=None):
     """Markazlashtirilgan tenglama paragrafi. number berilsa o'ngda (n) qo'yiladi."""
     from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_TAB_ALIGNMENT

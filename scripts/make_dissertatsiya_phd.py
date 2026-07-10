@@ -11,9 +11,12 @@ from __future__ import annotations
 from datetime import date
 from pathlib import Path
 
-import matplotlib
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
+try:                                    # matplotlib faqat eski formula-PNG'larini
+    import matplotlib                    # qayta chizish uchun kerak; ular diskda bo'lsa
+    matplotlib.use("Agg")                # host'da (docx bor, matplotlib yo'q) o'tkazib yuboriladi
+    import matplotlib.pyplot as plt
+except ModuleNotFoundError:
+    plt = None
 
 from docx import Document
 from docx.enum.text import WD_ALIGN_PARAGRAPH
@@ -45,6 +48,10 @@ def section(fn):
 # --------------------------------------------------------------------------- #
 def render_eq(name, latex, fontsize=20):
     path = EQ / f"{name}.png"
+    if plt is None:
+        if not path.exists():
+            raise RuntimeError(f"matplotlib yo'q va {path} mavjud emas — konteynerda ishga tushiring")
+        return
     fig = plt.figure(figsize=(0.01, 0.01))
     fig.text(0.0, 0.0, f"${latex}$", fontsize=fontsize, color="black")
     fig.savefig(str(path), dpi=200, bbox_inches="tight", pad_inches=0.12,
@@ -139,7 +146,7 @@ def lead(doc, label, text):
     p = doc.add_paragraph()
     p.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
     p.paragraph_format.first_line_indent = Cm(1.0)
-    p.add_run(label + " ").bold = True
+    _inline.emit_rich(p, label + " ", bold_all=True)   # yorliqda ham $...$ ishlaydi
     _inline.emit_rich(p, text)
     return p
 
@@ -176,9 +183,7 @@ def img(doc, name, width=5.6, caption=None):
     if caption:
         c = doc.add_paragraph()
         c.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        r = c.add_run(caption)
-        r.italic = True
-        r.font.size = Pt(12)
+        _inline.emit_rich(c, caption, size=12, italic=True)
 
 
 def img_path(doc, path, width=5.6, caption=None):
@@ -193,31 +198,25 @@ def img_path(doc, path, width=5.6, caption=None):
     if caption:
         c = doc.add_paragraph()
         c.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        r = c.add_run(caption)
-        r.italic = True
-        r.font.size = Pt(12)
+        _inline.emit_rich(c, caption, size=12, italic=True)
 
 
-def table(doc, headers, rows, caption=None):
+def table(doc, headers, rows, caption=None, size=12):
     if caption:
         c = doc.add_paragraph()
         c.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        r = c.add_run(caption)
-        r.bold = True
-        r.font.size = Pt(12)
+        _inline.emit_rich(c, caption, size=size, bold_all=True)
     t = doc.add_table(rows=1, cols=len(headers))
     t.style = "Table Grid"
     for i, hh in enumerate(headers):
         cell = t.rows[0].cells[i]
         cell.text = ""
-        rr = cell.paragraphs[0].add_run(hh)
-        rr.bold = True
-        rr.font.size = Pt(12)
+        _inline.emit_rich(cell.paragraphs[0], str(hh), size=size, bold_all=True)
     for row in rows:
         cells = t.add_row().cells
         for i, val in enumerate(row):
             cells[i].text = ""
-            cells[i].paragraphs[0].add_run(str(val)).font.size = Pt(12)
+            _inline.emit_rich(cells[i].paragraphs[0], str(val), size=size)
     doc.add_paragraph()
 
 
@@ -301,6 +300,15 @@ def mundarija(doc):
         ("2.13-§. Eksperimental tadqiqot natijalari", False),
         ("2.14-§. Natijalarni muhokama qilish va klinik talqin", False),
         ("II (davomi) bob boʻyicha xulosalar", False),
+        ("II BOB (DAVOMI-2). BULCHA BELGI TANLASH USULINI KATTA HAJMLI BAZADA TEKSHIRISH: "
+         "BARQARORLIK, MAʼLUMOT SIZISHI VA ANSAMBLNING HALOL BAHOSI", True),
+        ("2.15-§. Katta baza va eksperiment protokoli", False),
+        ("2.16-§. Belgi tanlash barqarorligini oʻlchash usuli", False),
+        ("2.17-§. Barqarorlik natijalari: ikki qatlamli manzara", False),
+        ("2.18-§. Maʼlumot sizishini aniqlash va nazorat qilish", False),
+        ("2.19-§. Gibrid ansamblning halol bahosi", False),
+        ("2.20-§. Ansambl foydasining shartlari va sezuvchanlik tahlili", False),
+        ("II (davomi-2) bob boʻyicha xulosalar", False),
         ("III BOB. ALGORITMLARNI AMALGA OSHIRUVCHI DASTURIY MAJMUA", True),
         ("3.1-§. Tizim arxitekturasi, maxfiylik va xavfsizlik", False),
         ("3.2-§. Annotatsiya, faol oʻrganish va AI yordami", False),
@@ -1283,6 +1291,16 @@ def bob2a_boolfs(doc):
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
     import dissertatsiya_bob_boolfs as bb
     bb.emit(doc, h1, h2, para, lead, bullets, table, concl, img_path)
+    pb(doc)
+
+
+@section
+def bob2b_boolfs_katta(doc):
+    import os
+    import sys
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import dissertatsiya_bob_boolfs_katta as bk
+    bk.emit(doc, h1, h2, para, lead, bullets, table, concl, img_path)
     pb(doc)
 
 
