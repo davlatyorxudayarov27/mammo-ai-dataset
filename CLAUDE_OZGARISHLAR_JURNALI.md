@@ -425,3 +425,42 @@ Xamdamov usulini sinash va ansambl mavzusida **2 ta maqola × 3 til** yozish.
 - `numpy`/`matplotlib` esa faqat konteynerda → rasmlar `mamograf-prod-app` ichida, .docx host'da quriladi.
 - OMML'da `sub(run(""), ...)` va bo'sh `nary` tanasi Word'da **bo'sh quti** bo'lib ko'rinadi —
   tekshirish uchun `m:e` bo'shligini sanash kerak.
+
+### Sessiya 10-a — maqolalardagi tekshirilmagan da'volarni yopish (avtonom tik)
+
+Yozilgan matnda **real hisob bilan qoplanmagan uchta da'vo** topildi va yopildi.
+
+1. **`P` mezoni noto'g'ri ta'riflangan edi.** Men uni «to'g'ri sinf bilan eng yaqin raqib
+   orasidagi masofa zaxirasi» deb yozgan edim. `boolfs/classifier.py:cv_P` ga qarasak,
+   `P = (1/N) Σ I[class(xᵢ)=yᵢ]` — ya'ni **oddiy aniqlikning aynan o'zi**. Matn tuzatildi;
+   real qiymatlar: boolfs 0,603 / YOLO 0,923 / ansambl 0,915. Bu maqolaning tezisini
+   kuchaytiradi (P bo'yicha ansambl «yomonroq», holbuki bacc ahamiyatli oshgan).
+2. **Chalkashlik matritsasi noto'g'ri o'qilgan edi.** «Asosiy chalkashlik o'sma↔limfa tuguni»
+   deb yozilgandi. Haqiqiy eng katta katak: limfa tuguni → BIRADS 1–2 = **62** (keyin →o'sma 42,
+   →kalsifikatsiya 27). Aynan 62 yolg'on musbat BIRADS 1–2 precision'ini 0,074 ga tushiradi.
+3. **«IoU sezuvchanlik tekshiruvi o'tkazildi» — o'tkazilmagan edi.** Endi haqiqatan o'tkazildi:
+   `scripts/exp24_iou_sensitivity.py` butun oqimni (moslashtirish → α* train'da → tozalangan
+   val'da baholash) IoU ∈ {0,3; 0,5; 0,7} × 3 detektor uchun qaytadan bajardi.
+   IoU=0,3 qiymatlari asosiy tahlil bilan aynan mos tushdi (mustaqil implementatsiya nazorati).
+
+**IoU sezuvchanligining natijasi da'voni RAD ETDI va maqolani yaxshiladi:**
+
+| Detektor | IoU | Δaniqlik | Δmuv.aniqlik | ΔAUC |
+|---|---|---|---|---|
+| YOLO11l-v2 (toza) | 0,3 | −0,8 (p=,074) | **+5,2 (p=,036)** | **+7,9 (p<,001)** |
+| YOLO11l-v2 (toza) | 0,5 | −0,9 (p=,072) | **+5,4 (p=,042)** | **+7,6 (p<,001)** |
+| YOLO11l-v2 (toza) | 0,7 | −2,6 (p<,001) | −0,8 (p=,648) | **+11,0 (p<,001)** |
+| YOLO11l | 0,7 | −0,8 (p=,184) | +9,1 (p=,014) | +18,0 |
+| YOLO11s | 0,7 | −3,6 (p<,001) | +25,9 (p<,001) | +9,3 |
+
+- **ROC-AUC foydasi 9/9 holatda ijobiy va ahamiyatli** (+6,9 … +18,6 f.p.) — chegaradan
+  mustaqil yagona xulosa.
+- **Muvozanatli aniqlikdagi foyda ROI qiyinligiga bog'liq**: toza detektorda IoU=0,7 da
+  yo'qoladi (mos ROI 2088→1828, faqat oson/aniq ramkalar qoladi, yakka detektorning o'z bacc'i
+  0,640→0,693 ko'tariladi). Sizgan detektorlarda esa aksincha — chegara qat'iylashgani sari
+  ansambl foydasi o'sadi.
+- Xulosa: **ansamblning asosiy qiymati tartiblash sifatida (AUC), aniq qaror qoidasida emas.**
+
+M2 maqolasiga **4.6-bo'lim + 7-jadval** qo'shildi (uch tilda), `d4` cheklovlar bandi va
+xulosaning 6-bandi qayta yozildi. Yakuniy holat: M2 — 7 jadval, 5 rasm, ~3150–3750 so'z,
+159–161 OMML tugun. Oltala hujjatda xom LaTeX 0, OMML sxema xatosi 0, bo'sh tenglama qutisi 0.
