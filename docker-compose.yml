@@ -6,6 +6,9 @@ services:
     environment:
       - LOCAL_DICOM_ROOT=/data/dicom
       - JWT_SECRET=${JWT_SECRET:-}
+      # Avtomatik anonimlashtirish (PHI tag'lari upload paytida tozalanadi).
+      # Default: yoqilgan. O'chirish uchun: AUTO_DEIDENTIFY=0
+      - AUTO_DEIDENTIFY=${AUTO_DEIDENTIFY:-1}
     volumes:
       - app_uploads:/app/app/uploads
       - app_annotations:/app/app/annotations

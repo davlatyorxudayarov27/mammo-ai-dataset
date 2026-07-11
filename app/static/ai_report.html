@@ -1,0 +1,227 @@
+<title>AI Annotatsiya Ma'lumotnomasi</title>
+<style>
+  :root{
+    --bg:#0b0f14;--panel:#121a22;--panel2:#18222d;--line:#25323f;
+    --ink:#e7eef4;--muted:#8b9cab;--faint:#5c6b78;
+    --accent:#38bdf8;--accent-ink:#0a1620;--lesion:#fbbf24;
+    --good:#4ade80;--warn:#fbbf24;--crit:#f87171;
+    --shadow:0 1px 0 rgba(255,255,255,.03),0 8px 24px rgba(0,0,0,.35);
+    --font-ui:system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    --font-mono:ui-monospace,"SF Mono","JetBrains Mono",Menlo,Consolas,monospace;--r:12px;
+  }
+  @media(prefers-color-scheme:light){:root{
+    --bg:#eef2f6;--panel:#fff;--panel2:#f3f7fb;--line:#d9e1ea;--ink:#152230;--muted:#54677a;--faint:#8496a6;
+    --accent:#0284c7;--accent-ink:#fff;--lesion:#b45309;--good:#15803d;--warn:#b45309;--crit:#b91c1c;
+    --shadow:0 1px 2px rgba(16,32,48,.06),0 10px 30px rgba(16,32,48,.08);}}
+  :root[data-theme="dark"]{--bg:#0b0f14;--panel:#121a22;--panel2:#18222d;--line:#25323f;--ink:#e7eef4;--muted:#8b9cab;--faint:#5c6b78;--accent:#38bdf8;--accent-ink:#0a1620;--lesion:#fbbf24;--good:#4ade80;--warn:#fbbf24;--crit:#f87171;--shadow:0 1px 0 rgba(255,255,255,.03),0 8px 24px rgba(0,0,0,.35);}
+  :root[data-theme="light"]{--bg:#eef2f6;--panel:#fff;--panel2:#f3f7fb;--line:#d9e1ea;--ink:#152230;--muted:#54677a;--faint:#8496a6;--accent:#0284c7;--accent-ink:#fff;--lesion:#b45309;--good:#15803d;--warn:#b45309;--crit:#b91c1c;--shadow:0 1px 2px rgba(16,32,48,.06),0 10px 30px rgba(16,32,48,.08);}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--font-ui);line-height:1.5;-webkit-font-smoothing:antialiased}
+  .wrap{max-width:1120px;margin:0 auto;padding:22px 20px 80px}
+  .mono{font-family:var(--font-mono);font-variant-numeric:tabular-nums}
+  .eyebrow{font-family:var(--font-mono);font-size:11px;letter-spacing:.18em;text-transform:uppercase;color:var(--accent);font-weight:600}
+  h1{font-size:25px;font-weight:700;margin:6px 0 0;letter-spacing:-.01em}
+  header{display:flex;justify-content:space-between;align-items:flex-end;gap:18px;padding-bottom:18px;border-bottom:1px solid var(--line);margin-bottom:20px;flex-wrap:wrap}
+  header .sub{color:var(--muted);font-size:13.5px;margin-top:5px;max-width:60ch}
+  .tools{display:flex;gap:8px;align-items:center}
+  .btn{font-size:13px;font-weight:600;border-radius:9px;border:1px solid var(--line);background:var(--panel2);color:var(--ink);padding:8px 12px;cursor:pointer;transition:border-color .15s}
+  .btn:hover{border-color:var(--accent)}
+  .btn:focus-visible,input:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+  .gen{font-family:var(--font-mono);font-size:11px;color:var(--faint)}
+
+  .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:14px;margin-bottom:18px}
+  .stat{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);padding:16px 18px;box-shadow:var(--shadow)}
+  .stat .l{font-family:var(--font-mono);font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted)}
+  .stat .v{font-size:32px;font-weight:700;font-variant-numeric:tabular-nums;margin-top:4px;line-height:1}
+  .stat .v small{font-size:14px;color:var(--faint);font-weight:500}
+
+  .grid2{display:grid;grid-template-columns:1.2fr .8fr;gap:16px;margin-bottom:18px}
+  @media(max-width:820px){.grid2{grid-template-columns:1fr}}
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);box-shadow:var(--shadow)}
+  .panel-h{padding:13px 16px;border-bottom:1px solid var(--line);font-family:var(--font-mono);font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);font-weight:600;display:flex;justify-content:space-between}
+  .pb{padding:14px 16px}
+
+  .clsrow{display:flex;align-items:center;gap:10px;margin:9px 0}
+  .clsrow .nm{width:150px;flex:none;font-size:13px;display:flex;align-items:center;gap:7px}
+  .clsrow .dot{width:9px;height:9px;border-radius:2px;flex:none}
+  .clsrow .track{flex:1;height:10px;background:var(--panel2);border-radius:5px;overflow:hidden;border:1px solid var(--line)}
+  .clsrow .track > i{display:block;height:100%;border-radius:5px}
+  .clsrow .ct{width:56px;text-align:right;font-family:var(--font-mono);font-size:12.5px;font-variant-numeric:tabular-nums}
+
+  #conf{display:block;width:100%;height:120px}
+  .confx{display:flex;justify-content:space-between;font-family:var(--font-mono);font-size:10px;color:var(--faint);margin-top:4px}
+  .models{margin-top:6px}
+  .models .m{display:flex;justify-content:space-between;font-size:12.5px;padding:5px 0;border-bottom:1px solid var(--line)}
+  .models .m .mono{color:var(--muted)}
+
+  .tablewrap{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);box-shadow:var(--shadow);overflow:hidden}
+  .thead{display:flex;align-items:center;justify-content:space-between;padding:12px 16px;border-bottom:1px solid var(--line);gap:12px;flex-wrap:wrap}
+  .thead h2{font-size:14px;font-weight:700;margin:0}
+  .search{background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:7px 11px;color:var(--ink);font-size:13px;width:230px;font-family:var(--font-ui)}
+  .tscroll{overflow-x:auto;max-height:520px;overflow-y:auto}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  thead th{position:sticky;top:0;background:var(--panel);text-align:left;padding:9px 14px;font-family:var(--font-mono);font-size:10.5px;text-transform:uppercase;letter-spacing:.07em;color:var(--muted);border-bottom:1px solid var(--line);z-index:1}
+  tbody td{padding:9px 14px;border-bottom:1px solid var(--line);vertical-align:middle}
+  tbody tr:hover{background:var(--panel2)}
+  td.ref{font-family:var(--font-mono);font-size:11.5px;color:var(--muted);max-width:340px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  td.num{font-family:var(--font-mono);font-variant-numeric:tabular-nums;text-align:right}
+  .lchip{font-family:var(--font-mono);font-size:10px;padding:2px 7px;border-radius:20px;border:1px solid var(--line);display:inline-flex;gap:5px;align-items:center;margin:1px 2px}
+  .lchip .d{width:7px;height:7px;border-radius:50%}
+  .conf-pill{font-family:var(--font-mono);font-size:11px;padding:2px 8px;border-radius:6px}
+
+  .gate{max-width:520px;margin:60px auto;text-align:center;background:var(--panel);border:1px solid var(--line);border-radius:var(--r);padding:32px 28px;box-shadow:var(--shadow)}
+  .gate h2{margin:0 0 8px;font-size:19px}
+  .gate p{color:var(--muted);font-size:14px}
+  .gate a{color:var(--accent);font-weight:600}
+  .hidden{display:none}
+  .foot{margin-top:22px;color:var(--faint);font-size:12px;text-align:center}
+</style>
+
+<div class="wrap">
+  <header>
+    <div>
+      <div class="eyebrow">AI Scan · 8-klass detektor · Registr</div>
+      <h1>AI Annotatsiya Ma'lumotnomasi</h1>
+      <div class="sub">Avtomatik (AI) belgilangan DICOM'lar bo'yicha to'liq registr — klasslar, ishonch darajasi va fayllar. Inson belgilari bu yerga kirmaydi.</div>
+    </div>
+    <div class="tools">
+      <span class="gen" id="gen"></span>
+      <button class="btn" id="refresh">↻ Yangilash</button>
+      <button class="btn" id="theme">◐</button>
+    </div>
+  </header>
+
+  <!-- auth gate -->
+  <div class="gate hidden" id="gate">
+    <h2>🔒 Kirish talab qilinadi</h2>
+    <p id="gateMsg">Bu ma'lumotnoma bemor ma'lumotini o'z ichiga oladi. Iltimos avval tizimga kiring, so'ng sahifani yangilang.</p>
+    <p style="margin-top:14px"><a href="/app">→ Tizimga kirish (/app)</a></p>
+  </div>
+
+  <!-- content -->
+  <div id="content">
+    <div class="cards">
+      <div class="stat"><div class="l">AI-belgilangan rasm</div><div class="v" id="sImgs">—</div></div>
+      <div class="stat"><div class="l">Jami deteksiya</div><div class="v" id="sDets">—</div></div>
+      <div class="stat"><div class="l">O'rtacha / rasm</div><div class="v" id="sAvg">—</div></div>
+      <div class="stat"><div class="l">Klasslar soni</div><div class="v" id="sCls">—</div></div>
+    </div>
+
+    <div class="grid2">
+      <section class="panel">
+        <div class="panel-h"><span>Klasslar bo'yicha taqsimot</span><span id="clsTot"></span></div>
+        <div class="pb" id="classes"></div>
+      </section>
+      <section class="panel">
+        <div class="panel-h">Ishonch darajasi</div>
+        <div class="pb">
+          <canvas id="conf" width="600" height="240"></canvas>
+          <div class="confx"><span>0%</span><span>50%</span><span>100%</span></div>
+          <div class="models" id="models"></div>
+        </div>
+      </section>
+    </div>
+
+    <div class="tablewrap">
+      <div class="thead">
+        <h2>Fayllar registri <span class="mono" id="tCount" style="color:var(--faint);font-weight:400"></span></h2>
+        <input class="search" id="search" placeholder="Fayl yoki klass bo'yicha qidirish…">
+      </div>
+      <div class="tscroll">
+        <table>
+          <thead><tr><th>DICOM fayl (ref)</th><th style="text-align:right">Belgi</th><th>Klasslar</th><th style="text-align:right">Maks. ishonch</th></tr></thead>
+          <tbody id="rows"></tbody>
+        </table>
+      </div>
+    </div>
+    <div class="foot" id="foot"></div>
+  </div>
+</div>
+
+<script>
+"use strict";
+const $=id=>document.getElementById(id);
+const TOKEN_KEY='mamograf_jwt';
+// klass ranglari
+const COLORS={calcification:'#fbbf24',mass:'#38bdf8',lymph_node:'#a78bfa',asymmetry:'#f472b6',
+  BIRADS12:'#4ade80',BIRADS45:'#f87171',architectural_distortion:'#fb923c',other:'#94a3b8'};
+function colorFor(k){return COLORS[k]|| '#'+((Math.abs(hash(k))&0xffffff)|0x404040).toString(16).slice(-6)}
+function hash(s){let h=0;for(let i=0;i<s.length;i++)h=(h*31+s.charCodeAt(i))|0;return h}
+let DATA=null, FILTER='';
+
+async function load(){
+  const tok=localStorage.getItem(TOKEN_KEY);
+  if(!tok){showGate('Token topilmadi — tizimga kirmagansiz.');return;}
+  let r;
+  try{ r=await fetch('/api/ai_annotations_data?_='+Date.now(),{cache:'no-store',headers:{'Authorization':'Bearer '+tok}}); }
+  catch(e){ showGate('Tarmoq xatosi: '+e); return; }
+  if(r.status===401||r.status===403){ showGate('Sessiya tugagan yoki ruxsat yo\'q. Qayta kiring.'); return; }
+  if(!r.ok){ showGate('Xato: HTTP '+r.status); return; }
+  DATA=await r.json();
+  $('gate').classList.add('hidden'); $('content').classList.remove('hidden');
+  render();
+}
+function showGate(msg){ $('gateMsg').textContent=msg; $('gate').classList.remove('hidden'); $('content').classList.add('hidden'); }
+
+function nf(n){return (n||0).toLocaleString('en-US')}
+function render(){
+  const d=DATA;
+  $('sImgs').textContent=nf(d.total_images);
+  $('sDets').textContent=nf(d.total_dets);
+  $('sAvg').innerHTML=d.avg_dets+' <small>det/rasm</small>';
+  const cls=Object.entries(d.by_class).sort((a,b)=>b[1]-a[1]);
+  $('sCls').textContent=cls.length;
+  $('clsTot').textContent=nf(d.total_dets)+' det';
+  // klass barlari
+  const mx=Math.max(1,...cls.map(c=>c[1]));
+  $('classes').innerHTML=cls.map(([k,v])=>`<div class="clsrow">
+    <div class="nm"><span class="dot" style="background:${colorFor(k)}"></span>${k}</div>
+    <div class="track"><i style="width:${v/mx*100}%;background:${colorFor(k)}"></i></div>
+    <div class="ct">${nf(v)}</div></div>`).join('') || '<div style="color:var(--faint);font-size:13px">Hali AI belgi yo\'q</div>';
+  drawConf(d.conf_buckets);
+  // modellar
+  $('models').innerHTML='<div style="font-family:var(--font-mono);font-size:10px;color:var(--faint);text-transform:uppercase;letter-spacing:.1em;margin:8px 0 2px">Model</div>'+
+    Object.entries(d.models||{}).map(([m,c])=>`<div class="m"><span>${m}</span><span class="mono">${nf(c)}</span></div>`).join('');
+  renderTable();
+  $('gen').textContent='Yangilangan: '+String(d.generated_at||'').replace('T',' ').slice(0,19)+' UTC';
+  $('foot').textContent='Ko\'rsatilgan ro\'yxat: '+d.sample_count+' fayl (eng ko\'pi bilan). Jami AI-belgilangan: '+nf(d.total_images)+' rasm.';
+}
+function drawConf(b){
+  const cv=$('conf'),x=cv.getContext('2d'),w=cv.width,h=cv.height;x.clearRect(0,0,w,h);
+  const mx=Math.max(1,...b);const bw=w/10;
+  const cs=getComputedStyle(document.body),acc=cs.getPropertyValue('--accent').trim(),line=cs.getPropertyValue('--line').trim();
+  x.strokeStyle=line;x.beginPath();x.moveTo(0,h-1);x.lineTo(w,h-1);x.stroke();
+  for(let i=0;i<10;i++){
+    const bh=Math.pow(b[i]/mx,.85)*(h-24);
+    x.fillStyle=acc;x.globalAlpha=0.35+0.06*i;
+    x.fillRect(i*bw+3,h-bh-16,bw-6,bh);
+    x.globalAlpha=1;x.fillStyle=cs.getPropertyValue('--muted').trim();x.font='10px ui-monospace,monospace';x.textAlign='center';
+    x.fillText(b[i],i*bw+bw/2,h-bh-20);
+  }
+}
+function confColor(c){return c>=.7?'var(--good)':c>=.4?'var(--warn)':'var(--crit)'}
+function renderTable(){
+  const q=FILTER.toLowerCase();
+  let rows=DATA.samples;
+  if(q)rows=rows.filter(s=>s.ref.toLowerCase().includes(q)||Object.keys(s.labels).some(l=>l.toLowerCase().includes(q)));
+  rows=rows.slice().sort((a,b)=>b.n-a.n);
+  $('tCount').textContent='('+rows.length+')';
+  $('rows').innerHTML=rows.map(s=>{
+    const chips=Object.entries(s.labels).map(([l,c])=>`<span class="lchip"><span class="d" style="background:${colorFor(l)}"></span>${l}${c>1?'·'+c:''}</span>`).join('');
+    return `<tr><td class="ref" title="${esc(s.ref)}">${esc(s.ref)}</td>
+      <td class="num">${s.n}</td><td>${chips}</td>
+      <td class="num"><span class="conf-pill" style="color:${confColor(s.maxc)}">${(s.maxc*100).toFixed(0)}%</span></td></tr>`;
+  }).join('') || '<tr><td colspan="4" style="padding:24px;text-align:center;color:var(--faint)">Mos fayl topilmadi</td></tr>';
+}
+function esc(s){return String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))}
+
+$('search').addEventListener('input',e=>{FILTER=e.target.value;renderTable();});
+$('refresh').addEventListener('click',load);
+$('theme').addEventListener('click',()=>{
+  const cur=document.documentElement.getAttribute('data-theme');
+  const next=cur==='dark'?'light':cur==='light'?'dark':(matchMedia('(prefers-color-scheme:dark)').matches?'light':'dark');
+  document.documentElement.setAttribute('data-theme',next);if(DATA)drawConf(DATA.conf_buckets);
+});
+load();
+setInterval(()=>{ if(DATA) load(); },30000);  // job ishlayotgani uchun har 30s yangilash
+</script>

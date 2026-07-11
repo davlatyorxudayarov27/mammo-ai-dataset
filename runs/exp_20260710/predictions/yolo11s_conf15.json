@@ -1,0 +1,20 @@
+{
+ "name": "yolo11s_conf15",
+ "weights": "yolo11s_8class.pt",
+ "conf": 0.15,
+ "iou": 0.3,
+ "split": "val",
+ "n_matched": 75,
+ "n_pred": 142,
+ "n_gt": 163,
+ "class_names": [
+  "BIRADS12",
+  "BIRADS45",
+  "architectural_distortion",
+  "asymmetry",
+  "calcification",
+  "lymph_node",
+  "mass",
+  "other"
+ ]
+}

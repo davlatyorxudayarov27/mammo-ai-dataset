@@ -1,0 +1,39 @@
+name: mamograf-prod
+
+# Production stack for VM 10.10.0.75 (domain aiscan.airi.uz).
+# No Caddy: port 80 is closed on this network and TLS is terminated on the
+# upstream edge proxy, which forwards aiscan.airi.uz:443 -> 10.10.0.75:8081.
+# (8080 is taken by another VM on this network, so we publish on 8081.)
+# The app trusts X-Forwarded-* headers (uvicorn --proxy-headers).
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile.prod
+    container_name: mamograf-app
+    restart: unless-stopped
+    environment:
+      - LOCAL_DICOM_ROOT=/data/dicom
+      - JWT_SECRET=${JWT_SECRET:-}
+      - AUTO_DEIDENTIFY=${AUTO_DEIDENTIFY:-1}
+      # Masofaviy GPU training server (10.10.0.72, RTX3090). Bo'sh bo'lsa — lokal training.
+      - REMOTE_TRAIN_URL=${REMOTE_TRAIN_URL:-}
+      - REMOTE_TRAIN_TOKEN=${REMOTE_TRAIN_TOKEN:-}
+      # Hisobot uchun lokal LLM (Ollama) — RTX3090 serverda. Bo'sh bo'lsa 127.0.0.1.
+      - OLLAMA_HOST=${OLLAMA_HOST:-}
+      - OLLAMA_MODEL=${OLLAMA_MODEL:-qwen2.5:7b}
+    volumes:
+      - app_uploads:/app/app/uploads
+      - app_annotations:/app/app/annotations
+      - app_models:/app/app/models
+      - app_db:/app/app
+      - ${LOCAL_DICOM_HOST_PATH:-./dicom_data}:/data/dicom:ro
+    ports:
+      - "8081:8000"
+
+volumes:
+  app_uploads:
+  app_annotations:
+  app_models:
+  app_db:

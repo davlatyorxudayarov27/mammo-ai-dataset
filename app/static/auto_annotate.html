@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="uz">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>AI Auto-annotatsiya — jonli holat</title>
+<style>
+  :root { color-scheme: light dark; }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+         background:#0f1420; color:#e6ebf5; padding:24px; }
+  @media (prefers-color-scheme: light){ body{ background:#f4f6fb; color:#1a2233; } .card{ background:#fff!important; } }
+  .wrap { max-width: 720px; margin: 0 auto; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  .sub { opacity:.6; font-size:13px; margin-bottom:18px; }
+  .card { background:#1a2233; border-radius:14px; padding:20px 22px; margin-bottom:16px;
+          box-shadow: 0 1px 3px rgba(0,0,0,.2); }
+  .bar { height:16px; background:rgba(128,128,128,.2); border-radius:8px; overflow:hidden; margin:10px 0; }
+  .bar > div { height:100%; background:linear-gradient(90deg,#3b82f6,#22d3ee); width:0; transition:width .6s; }
+  .big { font-size:34px; font-weight:700; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(120px,1fr)); gap:12px; margin-top:14px; }
+  .stat { background:rgba(128,128,128,.08); border-radius:10px; padding:12px 14px; }
+  .stat .n { font-size:22px; font-weight:600; }
+  .stat .l { font-size:12px; opacity:.65; margin-top:2px; }
+  .ok { color:#4ade80; } .warn { color:#fca5a5; } .muted{opacity:.6;}
+  .dot { display:inline-block; width:9px; height:9px; border-radius:50%; margin-right:6px; }
+  .live { background:#4ade80; box-shadow:0 0 0 0 #4ade80; animation:p 1.6s infinite; }
+  .done { background:#60a5fa; } .stop{ background:#fca5a5; }
+  @keyframes p { 0%{box-shadow:0 0 0 0 rgba(74,222,128,.6)} 70%{box-shadow:0 0 0 8px rgba(74,222,128,0)} 100%{box-shadow:0 0 0 0 rgba(74,222,128,0)} }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>🤖 AI Auto-annotatsiya — jonli holat</h1>
+  <div class="sub">8-klass detektor barcha DICOM'larni belgilaydi · inson belgilariga tegmaydi · har 5 soniyada yangilanadi</div>
+  <div class="card">
+    <div><span id="dot" class="dot live"></span><span id="state">Yuklanmoqda…</span></div>
+    <div class="big"><span id="pct">0</span>%</div>
+    <div class="bar"><div id="fill"></div></div>
+    <div class="muted" id="counts">—</div>
+    <div class="grid">
+      <div class="stat"><div class="n ok" id="with_det">0</div><div class="l">belgilangan rasm</div></div>
+      <div class="stat"><div class="n" id="dets">0</div><div class="l">deteksiya (AI belgi)</div></div>
+      <div class="stat"><div class="n" id="human">0</div><div class="l">inson-fayl (tegilmadi)</div></div>
+      <div class="stat"><div class="n muted" id="nopix">0</div><div class="l">rasmsiz (skip)</div></div>
+      <div class="stat"><div class="n warn" id="errors">0</div><div class="l">xato</div></div>
+      <div class="stat"><div class="n" id="eta">—</div><div class="l">taxminiy tugash</div></div>
+    </div>
+  </div>
+  <div class="sub" id="updated"></div>
+</div>
+<script>
+async function tick(){
+  let r;
+  try{
+    r = await fetch('/auto_annotate_status.html?_='+Date.now(), {cache:'no-store'});
+  }catch(netErr){
+    document.getElementById('state').textContent = '❌ Tarmoq xatosi: '+netErr;
+    return;
+  }
+  if(!r.ok){
+    document.getElementById('state').textContent = '❌ HTTP '+r.status+' — status fayli topilmadi';
+    return;
+  }
+  const raw = await r.text();
+  let d;
+  try{ d = JSON.parse(raw); }
+  catch(e){
+    document.getElementById('state').textContent = '❌ JSON emas (ehtimol keshlangan/proxy): '+raw.slice(0,60);
+    return;
+  }
+  try{
+    document.getElementById('pct').textContent = (d.percent||0).toFixed(1);
+    document.getElementById('fill').style.width = (d.percent||0)+'%';
+    document.getElementById('counts').textContent =
+      `${d.done||0} / ${d.total||0} DICOM · ${(d.rate_per_s||0)} fayl/s`;
+    document.getElementById('with_det').textContent = d.with_det||0;
+    document.getElementById('dets').textContent = d.dets||0;
+    document.getElementById('human').textContent = d.skipped_human||0;
+    document.getElementById('nopix').textContent = d.skipped_nopix||0;
+    document.getElementById('errors').textContent = d.errors||0;
+    document.getElementById('eta').textContent = d.eta_min!=null ? (d.eta_min+' daq') : '—';
+    const dot=document.getElementById('dot'), st=document.getElementById('state');
+    if(d.running){ dot.className='dot live'; st.textContent='⚙️ Ishlayapti'; }
+    else if((d.percent||0)>=100){ dot.className='dot done'; st.textContent='✅ Tugadi'; }
+    else { dot.className='dot stop'; st.textContent='⏸ To\'xtagan'; }
+    document.getElementById('updated').textContent = 'Yangilangan: '+(d.updated_at||'').replace('T',' ').slice(0,19)+' UTC · tekshirildi '+new Date().toLocaleTimeString();
+  }catch(e){
+    document.getElementById('state').textContent = '⚠️ Ko\'rsatishda xato: '+e;
+  }
+}
+tick(); setInterval(tick, 5000);
+</script>
+</body>
+</html>

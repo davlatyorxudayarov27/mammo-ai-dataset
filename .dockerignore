@@ -1,0 +1,32 @@
+# Build kontekstini kichraytirish + image'ni yengillashtirish.
+# DIQQAT: model/uploads/annotations/db RUNTIME'da named volume'lardan keladi
+# (docker-compose.prod.yml) — image'ga baked bo'lishi SHART EMAS va volume ularni
+# baribir soya qiladi. Shuning uchun bularni kontekstdan chiqaramiz.
+.git
+.github
+backups/
+backups2/
+docs/
+doc_assets/
+*.tar.gz
+*.bundle
+*.docx
+*.pdf
+*.pptx
+*.xlsx
+*.doc
+
+# Runtime volume'lar (image'ga kerak emas)
+dicom_data/
+app/uploads/
+app/models/
+app/annotations/
+app/db.sqlite3
+app/.jwt_secret
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/

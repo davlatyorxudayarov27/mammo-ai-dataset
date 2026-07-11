@@ -15,6 +15,7 @@
   <button class="mobile-toggle" id="mobileMetaBtn" title="O'ng panel">📋</button>
   <div class="user-bar" id="userBar">
     <span id="userInfo" hidden></span>
+    <a id="aiCountBadge" href="/api/ai_report" target="_blank" rel="noopener" title="AI annotatsiya ma'lumotnomasi" hidden style="background:linear-gradient(135deg,#0ea5e9,#2563eb);color:#fff;padding:4px 11px;border-radius:12px;font-size:12px;font-weight:600;text-decoration:none;display:inline-flex;align-items:center;gap:5px">🩻 AI <b id="aiCountN" style="font-variant-numeric:tabular-nums">…</b></a>
     <span class="bell-wrap" id="bellWrap" hidden>
       <button id="bellBtn" title="Bildirishnomalar">🔔<span class="bell-badge" id="bellBadge" hidden>0</span></button>
       <div class="bell-dropdown" id="bellDropdown" hidden></div>
@@ -22,6 +23,12 @@
     <button id="overviewBtn" hidden title="Annotatsiya qilingan DICOM'lar (kart ko'rinish)">🗂</button>
     <button id="auditBtn" hidden title="Audit timeline">📜</button>
     <button id="reviewBtn" hidden title="Tadqiqot review (pseudo-bbox tasdiqlash)">🔬</button>
+    <button id="exportAnnBtn" hidden title="Annotation bo'lgan fayllarni eksport qilish">📤 Eksport</button>
+    <button id="reportBtn" hidden title="Annotatsiyalardan mammografiya hisoboti qoralamasi">📝 Hisobot</button>
+    <button id="trainPrepBtn" hidden title="Annotation'lardan YOLO training dataset tayyorlash">🎓 Dataset</button>
+    <a id="modelStudioLink" hidden href="train.html" target="_self" title="Model Studio — model yaratish, parametrlar, monitor" style="background:linear-gradient(135deg,#4a90e2,#7048e8);color:#fff;padding:6px 12px;border-radius:4px;font-size:13px;text-decoration:none;font-weight:600">🧪 Model Studio</a>
+    <button id="modelMgrBtn" hidden title="Modellar dashboard'i (statistika, o'chirish)">🤖 Modellar</button>
+    <span id="activeLearnBadge" hidden style="background:#22c55e;color:#fff;padding:2px 8px;border-radius:10px;font-size:11px;cursor:pointer" title="Yangi modelni o'qitishga vaqt keldi"></span>
     <button id="statsBtn" hidden title="Statistika">📊</button>
     <button id="pacsBtn" hidden title="PACS serverlar">🏥</button>
     <button id="totpBtn" hidden title="2FA sozlash">🔒</button>
@@ -30,6 +37,237 @@
     <button id="loginBtn" hidden>Kirish</button>
   </div>
 </header>
+<script>
+/* Header AI-annotatsiya soni badge'i — faqat son, ma'lumotnomага havola */
+(function(){
+  var TK='mamograf_jwt';
+  function upd(){
+    var b=document.getElementById('aiCountBadge'); if(!b)return;
+    var t=localStorage.getItem(TK); if(!t){b.hidden=true;return;}
+    fetch('/api/ai_annotations_data?_='+Date.now(),{cache:'no-store',headers:{'Authorization':'Bearer '+t}})
+      .then(function(r){return r.ok?r.json():null;})
+      .then(function(d){ if(d){document.getElementById('aiCountN').textContent=(d.total_images||0).toLocaleString('en-US');b.hidden=false;} })
+      .catch(function(){});
+  }
+  upd(); setInterval(upd,30000);
+})();
+</script>
+
+<!-- Modellar dashboard'i -->
+<div class="modal" id="modelMgrModal" hidden>
+  <div class="modal-card" style="max-width:680px">
+    <h2>🤖 Modellar dashboard</h2>
+    <p style="font-size:12px;color:var(--muted);margin-top:0">
+      Mavjud AI modellari: hajm, qachon qo'shilgan, har biri qancha annotation chiqargan.
+      <strong>trained_*</strong> prefiksli modellar — lokal o'qitilgan, o'chirish mumkin.
+    </p>
+    <div id="alPanel" style="margin:10px 0;padding:8px;border-radius:4px;font-size:13px"></div>
+    <div id="modelsTable" style="font-size:13px"></div>
+    <div style="display:flex;justify-content:flex-end;margin-top:10px">
+      <button type="button" id="mmCloseBtn">Yopish</button>
+    </div>
+  </div>
+</div>
+
+<!-- Mammografiya hisoboti generatori modali -->
+<div class="modal" id="reportModal" hidden>
+  <div class="modal-card" style="max-width:680px">
+    <h2>📝 Mammografiya hisoboti (qoralama)</h2>
+    <p style="color:var(--muted);font-size:12px;margin-top:0">
+      Joriy annotatsiyalardan tuzilgan strukturaviy topilmalardan hisobot.
+      Radiolog tekshirib tasdiqlaydi — bu QORALAMA. <span id="reportModeBadge"></span>
+      <br><span id="reportBackends" style="font-size:11px"></span>
+    </p>
+    <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;flex-wrap:wrap">
+      <label style="font-size:12px;color:var(--muted)">Usul:
+        <select id="reportMode">
+          <option value="auto">Auto (lokal model bo'lsa, aks holda shablon)</option>
+          <option value="template">Boyitilgan shablon (modelsiz)</option>
+          <option value="local">Lokal AI (Ollama)</option>
+        </select>
+      </label>
+      <button type="button" id="reportRegenBtn">↻ Qayta yaratish</button>
+      <span id="reportStatus" style="font-size:12px;color:var(--muted)"></span>
+    </div>
+    <textarea id="reportText" spellcheck="false"
+      style="width:100%;min-height:320px;box-sizing:border-box;font-family:inherit;font-size:13px;line-height:1.5;padding:10px;border:1px solid var(--border);border-radius:4px;background:var(--panel-2,#1a1f2e);color:var(--text,#eee);white-space:pre-wrap"></textarea>
+    <div style="display:flex;justify-content:space-between;align-items:flex-end;margin-top:10px;gap:8px">
+      <span id="reportFindings" style="font-size:11px;color:var(--muted)"></span>
+      <span style="white-space:nowrap">
+        <button type="button" id="reportSrBtn" title="Tasdiqlangan hisobotni DICOM Structured Report sifatida saqlash">💾 DICOM SR</button>
+        <button type="button" id="reportCopyBtn">📋 Nusxa olish</button>
+        <button type="button" id="reportCloseBtn">Yopish</button>
+      </span>
+    </div>
+  </div>
+</div>
+
+<!-- YOLO training dataset tayyorlash modali -->
+<div class="modal" id="trainPrepModal" hidden>
+  <div class="modal-card" style="max-width:600px">
+    <div class="modal-head">
+      <h2>🎓 Training dataset tayyorlash</h2>
+      <button class="modal-close" id="trainPrepXBtn" type="button" title="Yopish">✕</button>
+    </div>
+    <p style="color:var(--muted);font-size:13px;margin-top:0">
+      Annotation'larni <strong>Ultralytics YOLO</strong> formatiga aylantirib,
+      <code>images/{train,val}</code> + <code>labels/{train,val}</code> + <code>data.yaml</code>
+      tuzilmasini yaratadi. Yangi model'ni o'qitish uchun darhol tayyor.
+    </p>
+    <form id="trainPrepForm">
+      <label>Dataset nomi (GPU serverda — 10.10.0.72)
+        <input type="text" id="tpDest" required placeholder="mamograf_v1" />
+        <span style="display:block;font-size:11px;color:var(--muted);margin-top:2px">
+          Dataset GPU serverga shu nom bilan oldindan yuklanadi —
+          <strong>▶ Train bosilganda darhol boshlanadi</strong> (qayta yuklashsiz).
+        </span>
+      </label>
+
+      <fieldset style="margin-top:12px;padding:8px;border:1px solid var(--border);border-radius:4px">
+        <legend style="font-size:12px;color:var(--muted)">Tasvir parametrlari</legend>
+        <label style="display:inline-flex;gap:4px;align-items:center;margin-right:16px">
+          O'lcham
+          <select id="tpSize">
+            <option value="512">512</option>
+            <option value="768">768</option>
+            <option value="1024" selected>1024</option>
+            <option value="1536">1536</option>
+            <option value="2048">2048</option>
+          </select>
+        </label>
+        <label style="display:inline-flex;gap:4px;align-items:center">
+          Format
+          <select id="tpFormat">
+            <option value="png" selected>PNG</option>
+            <option value="jpg">JPG (q=92)</option>
+          </select>
+        </label>
+      </fieldset>
+
+      <fieldset style="margin-top:8px;padding:8px;border:1px solid var(--border);border-radius:4px">
+        <legend style="font-size:12px;color:var(--muted)">Split (patient-aware)</legend>
+        <label>Val ulushi: <input type="number" id="tpValFrac" min="0" max="0.5" step="0.05" value="0.15" style="width:70px" /> (0.15 = 15% val)</label>
+        <label style="display:block;font-size:12px;color:var(--muted);margin-top:4px">Random seed: <input type="number" id="tpSeed" value="42" style="width:80px" /></label>
+      </fieldset>
+
+      <fieldset style="margin-top:8px;padding:8px;border:1px solid var(--border);border-radius:4px">
+        <legend style="font-size:12px;color:var(--muted)">Filtr</legend>
+        <label style="display:block">
+          <input type="checkbox" id="tpIncludeAi" /> AI tomonidan yaratilgan annotation'lar ham qo'shilsin
+          <span style="font-size:11px;color:var(--muted)">(odatda noaniq, sukut: faqat qo'lda)</span>
+        </label>
+        <label style="display:block;font-size:12px;color:var(--muted)">Status filtri (vergulli, bo'sh = barchasi)
+          <input type="text" id="tpStatuses" placeholder="submitted, approved, edited" />
+        </label>
+        <label style="display:block;font-size:12px;color:var(--muted)">Klasslar (bo'sh = annotation label'laridan avto)
+          <input type="text" id="tpClasses" placeholder="mass, calcification, asymmetry" />
+        </label>
+      </fieldset>
+
+      <fieldset style="margin-top:8px;padding:8px;border:1px solid var(--border);border-radius:4px">
+        <legend style="font-size:12px;color:var(--muted)">Qo'shimcha</legend>
+        <label style="display:block">
+          <input type="checkbox" id="tpZip" /> Tugagandan keyin ZIP qilib qo'y (ko'chirishga qulay)
+        </label>
+      </fieldset>
+
+      <div id="tpResult" style="margin-top:12px;font-size:13px"></div>
+      <div style="display:flex;gap:8px;margin-top:12px;justify-content:flex-end">
+        <button type="button" id="tpCloseBtn">Yopish</button>
+        <button type="submit" id="tpSubmitBtn">🎓 Dataset yaratish</button>
+      </div>
+    </form>
+
+    <!-- Server'da bevosita o'qitish -->
+    <fieldset style="margin-top:14px;padding:8px;border:1px solid var(--accent,#4a90e2);border-radius:4px">
+      <legend style="font-size:12px;color:var(--accent,#4a90e2)">🤖 Server'da o'qitish (Ultralytics)</legend>
+      <p style="font-size:12px;color:var(--muted);margin:0 0 6px">
+        Yuqorida dataset yaratilgandan keyin shu data.yaml asosida YOLO trening fonda boshlanadi.
+      </p>
+      <label style="display:inline-flex;gap:4px;align-items:center;margin-right:10px">
+        Asos model
+        <select id="trBaseModel">
+          <option value="yolo11n.pt">yolo11n (eng yengil)</option>
+          <option value="yolo11s.pt">yolo11s</option>
+          <option value="yolo11m.pt" selected>yolo11m</option>
+          <option value="yolo11l.pt">yolo11l</option>
+          <option value="yolo11x.pt">yolo11x (eng kuchli)</option>
+        </select>
+      </label>
+      <label style="display:inline-flex;gap:4px;align-items:center;margin-right:10px">Epochs <input type="number" id="trEpochs" value="50" min="1" max="500" style="width:70px" /></label>
+      <label style="display:inline-flex;gap:4px;align-items:center;margin-right:10px">Batch <input type="number" id="trBatch" value="8" min="1" max="64" style="width:60px" /></label>
+      <label style="display:inline-flex;gap:4px;align-items:center">
+        <input type="checkbox" id="trDeploy" checked /> Tugagach app/models/ ga deploy
+      </label>
+      <div style="margin-top:8px;display:flex;gap:8px;align-items:center">
+        <button type="button" id="trRunBtn" disabled>🚀 Hozir o'qit</button>
+        <span id="trRunStatus" style="font-size:12px;color:var(--muted)">Avval dataset yarating</span>
+      </div>
+      <div id="trLogView" style="margin-top:8px;font-family:monospace;font-size:11px;background:#000;color:#0f0;padding:6px;border-radius:3px;max-height:200px;overflow:auto;display:none"></div>
+    </fieldset>
+  </div>
+</div>
+
+<!-- Annotation eksport modali -->
+<div class="modal" id="exportAnnModal" hidden>
+  <div class="modal-card" style="max-width:560px">
+    <h2>📤 Annotation bo'lgan fayllarni eksport</h2>
+    <p style="color:var(--muted);font-size:13px;margin-top:0">
+      Annotation yoki belgilangan status'dagi DICOM fayllar boshqa papkaga
+      <strong>nusxalanadi</strong> (asl fayllar joyida qoladi).
+    </p>
+    <form id="exportAnnForm">
+      <label>Maqsad papka (mutlaq yo'l)
+        <input type="text" id="expDest" required placeholder="d:\\eksport\\annotatsiyalar" />
+      </label>
+      <fieldset style="margin-top:12px;padding:8px;border:1px solid var(--border);border-radius:4px">
+        <legend style="font-size:12px;color:var(--muted)">Manba</legend>
+        <label style="display:inline-flex;gap:4px;align-items:center;margin-right:12px">
+          <input type="radio" name="expSource" value="upload" checked /> Yuklamalar
+        </label>
+        <label style="display:inline-flex;gap:4px;align-items:center;margin-right:12px">
+          <input type="radio" name="expSource" value="local" /> Lokal
+        </label>
+        <label style="display:inline-flex;gap:4px;align-items:center">
+          <input type="radio" name="expSource" value="both" /> Ikkalasi
+        </label>
+      </fieldset>
+      <fieldset style="margin-top:8px;padding:8px;border:1px solid var(--border);border-radius:4px">
+        <legend style="font-size:12px;color:var(--muted)">Filtr</legend>
+        <label style="display:block;margin-bottom:4px">
+          <input type="checkbox" id="expRequireAnn" checked /> Annotation bo'lishi shart
+        </label>
+        <label style="display:block;margin-bottom:4px">
+          <input type="checkbox" id="expRequireHuman" /> Faqat qo'lda yaratilgan (AI emas)
+        </label>
+        <label style="display:block;font-size:12px;color:var(--muted)">Status (vergul bilan, bo'sh = barchasi)
+          <input type="text" id="expStatuses" placeholder="submitted, approved, edited" />
+        </label>
+      </fieldset>
+      <fieldset style="margin-top:8px;padding:8px;border:1px solid var(--border);border-radius:4px">
+        <legend style="font-size:12px;color:var(--muted)">Tashkillashtirish</legend>
+        <label>
+          <select id="expOrganize">
+            <option value="flat">Tekis (hamma birga)</option>
+            <option value="by_patient">PatientID bo'yicha papkalar</option>
+            <option value="by_status">Status bo'yicha papkalar</option>
+          </select>
+        </label>
+        <label style="display:block;margin-top:6px">
+          <input type="checkbox" id="expIncludeJson" checked /> Annotation JSON ham
+        </label>
+        <label style="display:block">
+          <input type="checkbox" id="expOverwrite" /> Mavjud fayllarni qaytayozish
+        </label>
+      </fieldset>
+      <div id="expResult" style="margin-top:12px;font-size:13px"></div>
+      <div style="display:flex;gap:8px;margin-top:12px;justify-content:flex-end">
+        <button type="button" id="expCloseBtn">Yopish</button>
+        <button type="submit" id="expSubmitBtn">📤 Eksport boshlash</button>
+      </div>
+    </form>
+  </div>
+</div>
 
 <div class="modal" id="loginModal" hidden>
   <div class="modal-card">
@@ -69,6 +307,26 @@
       <button class="modal-close" id="historyCloseBtn">✕</button>
     </div>
     <div class="modal-body" id="historyBody"></div>
+  </div>
+</div>
+
+<div class="modal" id="radiomicsModal" hidden>
+  <div class="modal-card wide">
+    <div class="modal-head">
+      <h2>📊 Radiomika tahlili</h2>
+      <button class="modal-close" id="radiomicsCloseBtn">✕</button>
+    </div>
+    <div class="modal-body" id="radiomicsBody"></div>
+  </div>
+</div>
+
+<div class="modal" id="riskModal" hidden>
+  <div class="modal-card">
+    <div class="modal-head">
+      <h2>🔬 Xavf tahlili (benign / malignant)</h2>
+      <button class="modal-close" id="riskCloseBtn">✕</button>
+    </div>
+    <div class="modal-body" id="riskBody"></div>
   </div>
 </div>
 
@@ -232,7 +490,11 @@
       <button id="toolSelect" class="tool active" title="Tanlash (V)">▶ Select</button>
       <button id="toolBbox" class="tool" title="Bbox chizish (B)">▭ BBox</button>
       <button id="toolPoly" class="tool" title="Poligon chizish (P) — bosish bilan nuqta qo'yish, dblclick yoki Enter — yopish, Esc — bekor">⬢ Poly</button>
-      <select id="labelSelect" title="Label"></select>
+      <button id="toolRuler" class="tool" title="O'lchov — 2 nuqta bosing, masofa mm'da">📏 Ruler</button>
+      <button id="toolAngle" class="tool" title="Burchak — 3 nuqta (uchburchak markazi), burchak gradusda">📐 Angle</button>
+      <button id="toolSmartClick" class="tool" title="Smart-click — bir bosish bilan avto-segmentatsiya">✨ Smart</button>
+      <button id="fourViewBtn" class="tool" title="4 proyeksiya yonma-yon (LCC/RCC/LMLO/RMLO)">📐 4-view</button>
+      <select id="labelSelect" title="Label (yangi annotatsiya uchun) — qo'shimcha label'larni o'ng paneldan belgilang"></select>
       <select id="biradsSelect" title="BI-RADS"><option value="">BI-RADS —</option></select>
       <span class="sep"></span>
       <select id="aiModelSelect" title="AI model" hidden></select>
@@ -241,20 +503,45 @@
         <label>≥<span id="aiConfLabel">25</span>%</label>
         <input type="range" id="aiConfSlider" min="10" max="95" step="5" value="25" />
       </span>
+      <label id="aiTtaWrap" title="Test-time augmentation — ko'p-masshtab + flip; aniqlikni oshiradi, sekinroq" hidden>
+        <input type="checkbox" id="aiTtaToggle" /> TTA
+      </label>
       <button id="aiAcceptAllBtn" title="Barcha takliflarni qabul qilish" hidden>✓ Hammasini qabul</button>
       <button id="aiClearBtn" title="AI takliflarini tozalash" hidden>✕</button>
+      <button id="aiHeatmapBtn" class="tool" title="Modellar kelishmaslik xaritasi (A3) — qaerlarda modellar farqlanadi" hidden>🌡 Heatmap</button>
+      <button id="diagBtn" class="tool" title="Tashxis — joriy rasm uchun benign/malignant klassifikatsiya" hidden>🩺 Tashxis</button>
       <span class="sep"></span>
       <label>Frame <input type="range" id="frameSlider" min="0" max="0" value="0" disabled /></label>
       <span id="frameLabel">0 / 0</span>
       <span class="zoomLbl" id="zoomLbl">100%</span>
       <span class="save-status" id="saveStatus"></span>
-      <button id="exportBtn" title="Barcha annotatsiyalarni COCO JSON sifatida yuklab olish">⤓ Eksport</button>
-      <button id="deidBtn" title="PHI tahlil va anonimlashtirilgan DICOM yuklab olish" hidden>🛡 De-ID</button>
-      <button id="srBtn" title="Annotatsiyalarni DICOM-SR sifatida yuklab olish" hidden>📄 SR</button>
-      <button id="segBtn" title="Annotatsiyalarni DICOM-SEG (pixel mask) sifatida yuklab olish" hidden>🖼 SEG</button>
-      <button id="cStoreBtn" title="DICOM'ni PACS serverga yuborish" hidden>📤 PACS</button>
-      <select id="tplSelect" title="Annotation template'ni qo'llash" hidden></select>
-      <button id="tplSaveBtn" title="Joriy annotatsiyalarni template sifatida saqlash" hidden>💾 Tpl</button>
+      <button id="saveBtn" title="Annotatsiyalarni saqlash (Ctrl+S)" disabled>💾 Saqlash</button>
+      <!-- Eksport formatlari — ixcham ochiluvchi menyu -->
+      <div class="tb-menu">
+        <button type="button" class="tb-menu-btn" id="exportMenuBtn" title="Eksport formatlari">⤓ Eksport ▾</button>
+        <div class="tb-menu-panel" hidden>
+          <button id="exportBtn" title="Barcha annotatsiyalarni COCO JSON sifatida yuklab olish">⤓ COCO</button>
+          <button id="exportYoloBtn" title="Barcha annotatsiyalarni YOLO (.txt) dataset (ZIP) sifatida yuklab olish">⤓ YOLO</button>
+          <button id="exportVocBtn" title="Barcha annotatsiyalarni Pascal VOC (XML, ZIP) sifatida yuklab olish">⤓ VOC</button>
+          <button id="exportCsvBtn" title="Barcha annotatsiyalarni CSV jadval sifatida yuklab olish">⤓ CSV</button>
+          <button id="srBtn" title="Annotatsiyalarni DICOM-SR sifatida yuklab olish" hidden>📄 DICOM-SR</button>
+          <button id="segBtn" title="Annotatsiyalarni DICOM-SEG (pixel mask) sifatida yuklab olish" hidden>🖼 DICOM-SEG</button>
+          <button id="maskPngBtn" title="Joriy rasm uchun segmentatsiya maskasi — PNG (label-indexed)" hidden>🎭 Mask PNG</button>
+          <button id="maskNiftiBtn" title="Joriy rasm uchun segmentatsiya maskasi — NIfTI (.nii.gz)" hidden>🎭 Mask NIfTI</button>
+        </div>
+      </div>
+      <!-- Qo'shimcha asboblar — ixcham ochiluvchi menyu -->
+      <div class="tb-menu">
+        <button type="button" class="tb-menu-btn" id="moreMenuBtn" title="Qo'shimcha asboblar" hidden>🛠 Ko'proq ▾</button>
+        <div class="tb-menu-panel" hidden>
+          <button id="deidBtn" title="PHI tahlil va anonimlashtirilgan DICOM yuklab olish" hidden>🛡 De-ID</button>
+          <button id="radiomicsBtn" title="Tanlangan annotatsiya uchun radiomika tahlili (ROI bo'yicha 60 ta belgi)" hidden>📊 Radiomika</button>
+          <button id="riskBtn" title="Tanlangan massa uchun benign/malignant (xavf) tahlili — radiomika klassifikatori" hidden>🔬 Xavf tahlili</button>
+          <button id="cStoreBtn" title="DICOM'ni PACS serverga yuborish" hidden>📤 PACS</button>
+          <select id="tplSelect" title="Annotation template'ni qo'llash" hidden></select>
+          <button id="tplSaveBtn" title="Joriy annotatsiyalarni template sifatida saqlash" hidden>💾 Tpl saqlash</button>
+        </div>
+      </div>
       <span class="presence" id="presencePill" hidden title="Real vaqtda hamkorlar"></span>
     </div>
 
@@ -263,8 +550,12 @@
         <div class="empty" id="emptyState">Chap paneldan DICOM tanlang yoki yuklang.</div>
         <div class="img-stack" id="imgStack" hidden>
           <img id="dicomImg" alt="" draggable="false" />
+          <img id="uncertaintyOverlay" alt="" draggable="false" hidden />
+          <img id="gmicOverlay" alt="" draggable="false" hidden />
           <svg id="annoSvg" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1 1" preserveAspectRatio="none"></svg>
         </div>
+        <!-- (C1) 4-view side-by-side -->
+        <div class="four-view" id="fourViewGrid" hidden></div>
         <div class="sr-view" id="srView" hidden></div>
       </div>
     </div>
@@ -278,10 +569,21 @@
         <label>WW <input type="number" id="wwInput" step="1" min="1" /></label>
         <input type="range" id="wwSlider" min="1" max="6000" value="1" />
       </div>
+      <!-- (B4) Mammografiya W/L presetlari -->
+      <div class="wl-presets" id="wlPresets">
+        <span class="wl-preset-label">Preset:</span>
+        <button class="wl-preset" data-preset="mass" title="Soft tissue / mass — WC=2000, WW=4000">🔵 Mass</button>
+        <button class="wl-preset" data-preset="calc" title="Microcalcifications — yuqori kontrast, WC=600, WW=1200">⚪ Calc</button>
+        <button class="wl-preset" data-preset="skin" title="Skin line / breast contour — keng oyna, WC=2500, WW=5000">🟡 Skin</button>
+        <button class="wl-preset" data-preset="auto" title="Histogramma asosida avto W/L">🤖 Auto</button>
+        <select id="wlCustomSelect" class="wl-preset-custom" title="Maxsus preset"></select>
+        <button id="wlSaveBtn" class="wl-preset" title="Hozirgi W/L'ni preset sifatida saqlash">💾 Saqlash</button>
+      </div>
     </div>
   </main>
 
   <aside class="meta-pane">
+    <div id="diagBox" class="diag-box" hidden></div>
     <div class="tabs right">
       <button class="tab active" data-rtab="meta">Metadata</button>
       <button class="tab" data-rtab="anno">Annotatsiyalar <span class="badge" id="annoCount">0</span></button>

@@ -174,6 +174,68 @@ def render_frame_png(
     return buf.getvalue()
 
 
+def load_frame_array(path: Path, frame: int = 0) -> tuple[np.ndarray, Optional[tuple[float, float]]]:
+    """Return the modality-LUT-applied 2D pixel array (float32, full resolution)
+    for one frame plus pixel spacing ``(row_mm, col_mm)`` if present.
+
+    Unlike :func:`render_frame_png`, this performs no windowing and no
+    downsampling, so the array aligns 1:1 with Rows×Columns — required for
+    radiomics ROI extraction.
+    """
+    ds = pydicom.dcmread(str(path), force=True)
+    _ensure_transfer_syntax(ds)
+    if "PixelData" not in ds:
+        raise NoPixelDataError(
+            modality=str(getattr(ds, "Modality", "") or ""),
+            sop_class=str(getattr(ds, "SOPClassUID", "") or ""),
+        )
+    raw = ds.pixel_array
+    frames = get_frame_count(ds)
+    raw = _select_frame(raw, frame, frames)
+    try:
+        raw = apply_modality_lut(raw, ds)
+    except Exception:
+        pass
+    if raw.ndim == 3 and raw.shape[-1] in (3, 4):
+        # Color → luminance so radiomics works on a single channel.
+        raw = raw[..., :3].astype(np.float32)
+        raw = 0.299 * raw[..., 0] + 0.587 * raw[..., 1] + 0.114 * raw[..., 2]
+    arr = np.asarray(raw, dtype=np.float32)
+
+    spacing: Optional[tuple[float, float]] = None
+    ps = getattr(ds, "PixelSpacing", None) or getattr(ds, "ImagerPixelSpacing", None)
+    if ps is not None:
+        try:
+            spacing = (float(ps[0]), float(ps[1]))
+        except (TypeError, ValueError, IndexError):
+            spacing = None
+    return arr, spacing
+
+
+def auto_window(path: Path, frame: int = 0) -> tuple[float, float]:
+    """Histogramma (persentil) asosida avtomatik WC/WW.
+
+    DICOM ``WindowCenter``/``WindowWidth`` taglariga tayanmaydi — xom
+    (modality-LUT qo'llangan) pikseldan 2..98 persentil oralig'ini oladi.
+    Shuning uchun anonimlashtirilgan yoki qayta ishlangan, oyna taglari
+    yo'q rasmlarda ham ishlaydi.
+    """
+    arr, _ = load_frame_array(path, frame)
+    finite = arr[np.isfinite(arr)]
+    if finite.size == 0:
+        return 0.0, 1.0
+    lo = float(np.percentile(finite, 2.0))
+    hi = float(np.percentile(finite, 98.0))
+    if hi <= lo:
+        lo = float(finite.min())
+        hi = float(finite.max())
+        if hi <= lo:
+            hi = lo + 1.0
+    wc = (lo + hi) / 2.0
+    ww = hi - lo
+    return wc, ww
+
+
 _META_KEYS = [
     "PatientName", "PatientID", "PatientSex", "PatientBirthDate", "PatientAge",
     "StudyDate", "StudyTime", "StudyDescription", "StudyInstanceUID",
@@ -293,6 +355,7 @@ def quick_summary(path: Path) -> dict:
     has_pixels = bool(rows and cols) and (
         "PixelData" in ds or "Rows" in ds
     )
+    pir = getattr(ds, "PatientIdentityRemoved", None)
     return {
         "patient": str(getattr(ds, "PatientName", "")),
         "patient_id": str(getattr(ds, "PatientID", "")),
@@ -304,4 +367,5 @@ def quick_summary(path: Path) -> dict:
         "cols": cols,
         "frames": get_frame_count(ds) if has_pixels else 0,
         "has_pixels": has_pixels,
+        "deidentified": (str(pir).upper() == "YES") if pir is not None else False,
     }

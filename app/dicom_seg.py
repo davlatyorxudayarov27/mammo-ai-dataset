@@ -47,6 +47,22 @@ def annotations_to_seg(
         meta.TransferSyntaxUID = ImplicitVRLittleEndian
         src.file_meta = meta
 
+    # Anonimlashtirilgan manbada yo'q bo'lishi mumkin, ammo highdicom Patient/Study
+    # modullarini manbadan ko'chirayotganda talab qiladigan atributlarni bo'sh
+    # qiymat bilan to'ldiramiz (aks holda 'no attribute PatientSex' kabi xato).
+    from pydicom.uid import generate_uid
+    _defaults = {
+        "PatientName": "Anonymous", "PatientID": "ANON",
+        "PatientBirthDate": "", "PatientSex": "",
+        "StudyID": "", "StudyDate": "", "StudyTime": "",
+        "AccessionNumber": "", "ReferringPhysicianName": "",
+    }
+    for _k, _v in _defaults.items():
+        if not hasattr(src, _k):
+            setattr(src, _k, _v)
+    if not getattr(src, "StudyInstanceUID", None):
+        src.StudyInstanceUID = generate_uid()
+
     if rows is None or cols is None:
         rows = int(getattr(src, "Rows", 0) or 0)
         cols = int(getattr(src, "Columns", 0) or 0)

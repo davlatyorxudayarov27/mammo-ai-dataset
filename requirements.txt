@@ -19,3 +19,23 @@ pylibjpeg-rle>=2.0
 opencv-python-headless>=4.8
 scipy>=1.11
 scikit-image>=0.22
+scikit-learn>=1.3
+nibabel>=5.2
+anthropic>=0.40
+onnx>=1.16
+onnxruntime>=1.18
+onnxslim>=0.1
+
+# --- GMIC benign/malignant "Tashxis" paneli (app/gmic) ---------------------- #
+# Vendor qilingan GMIC kodi bularni TO'G'RIDAN-TO'G'RI import qiladi. h5py va
+# pandas hech qaysi boshqa paket orqali kelmaydi (oldin qo'lda o'rnatilardi,
+# konteyner qayta qurilganda yo'qolardi). Qolganlari ultralytics/scikit-image
+# orqali bilvosita keladi, lekin GMIC'ning asosiy bog'liqligi sifatida aniq
+# ko'rsatamiz — kelajakda transitive uzilishdan himoya.
+torch>=2.2
+torchvision>=0.17
+h5py>=3.10
+pandas>=2.0
+imageio>=2.30
+matplotlib>=3.7
+tqdm>=4.65

@@ -1,0 +1,11 @@
+exp01_fit rc=0 8s
+exp02_eval_val rc=0 3s
+exp03_eval_train rc=0 9s
+exp04_nsweep rc=1 1s
+exp05_ens_s_a01 rc=0 22s
+exp06_ens_s_a09 rc=0 22s
+exp07_ens_s_conf15 rc=0 22s
+exp08_ens_s_iou05 rc=0 22s
+exp09_ens_11l rc=0 61s
+exp10_ens_v2ep50 rc=0 50s
+exp11_ens_s_train rc=0 71s

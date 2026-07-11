@@ -5,6 +5,9 @@ import io
 import json
 import os
 import re
+import subprocess
+import sys
+import threading
 import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
@@ -12,9 +15,9 @@ from pathlib import Path
 from typing import Optional
 
 import pydicom
-from fastapi import Depends, FastAPI, File, HTTPException, Query, Request, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi import BackgroundTasks, Depends, FastAPI, File, HTTPException, Query, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from slowapi import Limiter, _rate_limit_exceeded_handler
@@ -22,25 +25,167 @@ from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
 
 from . import annotations as annot_store
+from . import audit as audit_mod
 from . import auth as auth_mod
 from . import db as db_mod
 from . import deidentify as deid
 from . import dicom_seg as dseg
 from . import dicom_sr as dsr
+from . import exporters as exporters
+from . import radiomics as radiomics_mod
+from . import radiomics_clf as radclf
 from . import inference as inf
 from . import pacs as pacs_mod
+from . import remote_train as remote_train
 from . import ws as ws_mod
+try:
+    from . import boolfs_api as boolfs_api   # bulcha belgilar (Xamdamov) — 2-bosqich klassifikator
+except Exception:  # numpy/skimage yo'q bo'lsa — bo'lim o'chadi, ilova ishlayveradi
+    boolfs_api = None
+try:
+    from . import gmic_infer as gmic_infer
+except Exception:  # vendored GMIC yoki numpy yo'q bo'lsa — GMIC funksiyasi o'chadi
+    gmic_infer = None
 from .dicom_utils import (
-    NoPixelDataError, extract_sr_content, quick_summary,
+    NoPixelDataError, auto_window, extract_sr_content, load_frame_array, quick_summary,
     read_metadata, render_frame_png,
 )
 
 BASE_DIR = Path(__file__).resolve().parent
 UPLOAD_DIR = BASE_DIR / "uploads"
 UPLOAD_DIR.mkdir(exist_ok=True)
+# Savatcha: o'chirilgan fayllar (model/.dcm) shu yerda saqlanadi — tiklash uchun
+TRASH_DIR = BASE_DIR / "_trash"
+TRASH_DIR.mkdir(exist_ok=True)
+
+
+def _trash_file(src: Path) -> str:
+    """Faylni savatcha papkaga ko'chiradi, yangi yo'lni (str) qaytaradi."""
+    dest = TRASH_DIR / f"{uuid.uuid4().hex}__{src.name}"
+    import shutil
+    shutil.move(str(src), str(dest))
+    return str(dest)
 ANNOT_DIR = BASE_DIR / "annotations"
 ANNOT_DIR.mkdir(exist_ok=True)
 STATIC_DIR = BASE_DIR / "static"
+
+# Avtomatik anonimlashtirish: upload paytida DICOM PHI tag'lari tozalanadi.
+# AUTO_DEIDENTIFY=0 yoki "false" o'rnatilsa — o'chiriladi (sukut: yoqilgan).
+AUTO_DEIDENTIFY = os.environ.get("AUTO_DEIDENTIFY", "1").strip().lower() not in (
+    "0", "false", "no", "off", ""
+)
+
+# (A1) Avtomatik AI inference upload paytida — radiolog ekranga kelganda
+# pseudo-bbox'lar allaqachon tayyor. Sukut bo'yicha O'CHIQ (opt-in):
+# AUTO_INFER_ON_UPLOAD=1 ko'rsatilganda yoqiladi.
+AUTO_INFER_ON_UPLOAD = os.environ.get("AUTO_INFER_ON_UPLOAD", "0").strip().lower() in (
+    "1", "true", "yes", "on"
+)
+AUTO_INFER_MODEL = os.environ.get("AUTO_INFER_MODEL", "").strip()
+AUTO_INFER_IOU = float(os.environ.get("AUTO_INFER_IOU", "0.5") or "0.5")
+AUTO_INFER_IMGSZ = int(os.environ.get("AUTO_INFER_IMGSZ", "1024") or "1024")
+
+# (A2) Ishonch 3-zona klassifikatsiyasi: yashil (avto-qabul) / sariq (ko'rib chiqish) / qizil (shubhali).
+# Default chegaralar:
+#   conf ≥ 0.85         → auto_accept (yashil, status=ai_accepted)
+#   0.40 ≤ conf < 0.85  → review      (sariq, status=ai_review)
+#   0.20 ≤ conf < 0.40  → suspect     (qizil pulsatsiya, status=ai_suspect)
+#   conf < 0.20         → tashlanadi (saqlanmaydi)
+AUTO_INFER_ACCEPT_THR = float(os.environ.get("AUTO_INFER_ACCEPT_THR", "0.85") or "0.85")
+AUTO_INFER_REVIEW_THR = float(os.environ.get("AUTO_INFER_REVIEW_THR", "0.40") or "0.40")
+AUTO_INFER_SUSPECT_THR = float(os.environ.get("AUTO_INFER_SUSPECT_THR", "0.20") or "0.20")
+# Inference uchun YOLO conf chegarasi — eng past zona chegarasi (suspect_thr)
+AUTO_INFER_CONF = AUTO_INFER_SUSPECT_THR
+
+
+def _classify_confidence_zone(conf: float) -> tuple[str, str]:
+    """Conf qiymatidan (zone_name, status) qaytaradi.
+    Agar conf < suspect_thr bo'lsa, ('drop', '') qaytariladi — tashlanadi."""
+    if conf >= AUTO_INFER_ACCEPT_THR:
+        return ("auto_accept", "ai_accepted")
+    if conf >= AUTO_INFER_REVIEW_THR:
+        return ("review", "ai_review")
+    if conf >= AUTO_INFER_SUSPECT_THR:
+        return ("suspect", "ai_suspect")
+    return ("drop", "")
+
+
+def _auto_infer_uploaded(file_id: str, dicom_path: Path, rows: int, cols: int) -> dict:
+    """Yuklangan DICOM uchun AI inference + pseudo-annotation saqlash.
+    Hech qachon istisno qaytarmaydi — upload muvaffaqiyatsiz bo'lmasligi uchun."""
+    info: dict = {"ran": False, "detections": 0, "model": None, "error": None}
+    if not (rows and cols):
+        info["error"] = "no pixels"
+        return info
+    try:
+        models = inf.list_models()
+        if not models:
+            info["error"] = "no models available"
+            return info
+        model_name = AUTO_INFER_MODEL or models[0]["name"]
+        try:
+            png_bytes = render_frame_png(dicom_path, frame=0, max_dim=2048)
+        except Exception as e:
+            info["error"] = f"render failed: {e}"
+            return info
+        try:
+            res = inf.infer_png(
+                png_bytes, model_name=model_name,
+                conf=AUTO_INFER_CONF, iou=AUTO_INFER_IOU,
+                imgsz=AUTO_INFER_IMGSZ, tta=False,
+            )
+        except Exception as e:
+            info["error"] = f"inference failed: {e}"
+            info["model"] = model_name
+            return info
+        detections = res.get("detections", []) or []
+        now = datetime.now(timezone.utc).isoformat()
+        anns = []
+        zone_counts = {"auto_accept": 0, "review": 0, "suspect": 0, "drop": 0}
+        for d in detections:
+            conf = float(d.get("confidence", 0.0))
+            zone, status = _classify_confidence_zone(conf)
+            zone_counts[zone] = zone_counts.get(zone, 0) + 1
+            if zone == "drop":
+                continue
+            anns.append({
+                "id": "ai" + uuid.uuid4().hex[:11],
+                "type": "bbox",
+                "label": d.get("label", "?"),
+                "bi_rads": "",
+                "note": f"AI: conf={conf:.2f} ({zone})",
+                "frame": 0,
+                "bbox": d.get("bbox", [0, 0, 0, 0]),
+                "confidence": conf,
+                "zone": zone,
+                "created_at": now,
+                "updated_at": now,
+                "created_by": f"ai:{model_name}",
+                "status": status,
+            })
+        if anns:
+            payload = {
+                "rows": rows,
+                "cols": cols,
+                "annotations": anns,
+            }
+            annot_store.save(ANNOT_DIR, "upload", file_id, payload)
+        info.update({
+            "ran": True,
+            "detections": len(detections),
+            "kept": len(anns),
+            "zones": zone_counts,
+            "model": model_name,
+            "thresholds": {
+                "accept": AUTO_INFER_ACCEPT_THR,
+                "review": AUTO_INFER_REVIEW_THR,
+                "suspect": AUTO_INFER_SUSPECT_THR,
+            },
+        })
+        return info
+    except Exception as e:
+        info["error"] = f"{type(e).__name__}: {e}"
+        return info
 
 DEFAULT_LABELS = [
     {"name": "mass", "color": "#ff5050"},
@@ -116,15 +261,139 @@ _CSP = (
     "frame-ancestors 'none';"
 )
 
+# Math Mentor mini-ilovasi (/mentor) inline skript + MathJax CDN ishlatadi.
+# Faqat shu yo'l uchun yumshatilgan CSP; asosiy tibbiy ilova qat'iy _CSP da qoladi.
+_CSP_MENTOR = (
+    "default-src 'self'; "
+    "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
+    "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
+    "img-src 'self' data: blob:; "
+    "font-src 'self' data: https://cdn.jsdelivr.net; "
+    "connect-src 'self'; "
+    "object-src 'none'; "
+    "base-uri 'self';"
+)
+
+
+# --- Audit: qaysi so'rovlar loglanadi (muhim harakatlar) ------------------- #
+_AUDIT_GET_PREFIXES = ("/api/db/patient",)   # bemor yozuvini ochish/ko'rish
+_AUDIT_SKIP_EXACT = {"/api/auth/me"}
+
+
+def _should_audit(method: str, path: str) -> bool:
+    if not path.startswith("/api/"):
+        return False
+    if path in _AUDIT_SKIP_EXACT:
+        return False
+    if path.startswith("/api/audit") or path.startswith("/api/trash"):
+        return False  # audit/savatchani ko'rishning o'zini loglamaymiz (shovqin)
+    if method in ("POST", "PUT", "PATCH", "DELETE"):
+        return True
+    if method == "GET" and any(path.startswith(p) for p in _AUDIT_GET_PREFIXES):
+        return True
+    return False
+
+
+def _audit_action(method: str, path: str) -> str:
+    if path.startswith("/api/auth/login"):
+        return "auth.login"
+    if path.startswith("/api/auth/logout"):
+        return "auth.logout"
+    seg = [s for s in path.split("/") if s]
+    base = seg[1] if len(seg) > 1 else "api"
+    verb = {"POST": "create", "PUT": "update", "PATCH": "update",
+            "DELETE": "delete", "GET": "view"}.get(method, method.lower())
+    return f"{base}.{verb}"
+
+
+def _audit_identity(request: Request):
+    auth = request.headers.get("Authorization", "")
+    if auth.startswith("Bearer "):
+        try:
+            payload = auth_mod.decode_token(auth[7:])
+            return payload.get("sub"), payload.get("role")
+        except Exception:
+            return None, None
+    return None, None
+
+
+# --------------------------------------------------------------------------- #
+# Global auth-guard: /api/** endpointlari token talab qiladi.                  #
+# Ilgari ~25 GET endpoint (bemor qidiruvi, fayllar, eksport, rasm) autentifi-  #
+# katsiyasiz ochiq edi — internetdan PHI sizardi. Endi bitta joyda yopiladi;    #
+# yangi qo'shilgan /api/* endpointlar ham avtomatik himoyalanadi.               #
+#                                                                              #
+# Token ikki manbadan qabul qilinadi:                                          #
+#   • Authorization: Bearer <jwt>  — barcha metodlar uchun (frontend api()).    #
+#   • mg_auth cookie               — FAQAT GET/HEAD uchun, <img src> rasm        #
+#     yuklashlari token qo'sha olmaydi. GET-only bo'lgani uchun CSRF xavfsiz    #
+#     (yozuv metodlari hamon header talab qiladi).                             #
+COOKIE_NAME = "mg_auth"
+# Autentifikatsiyasiz ochiq qoladigan /api yo'llari (login sahifasi uchun).
+_PUBLIC_API = {"/api/config", "/api/auth/login"}
+
+
+def _guard_ok(request: Request) -> bool:
+    auth = request.headers.get("Authorization", "")
+    if auth.startswith("Bearer "):
+        try:
+            auth_mod.decode_token(auth[7:])
+            return True
+        except Exception:
+            return False
+    # Cookie faqat xavfsiz (o'qish) metodlar uchun — CSRF'dan himoya.
+    if request.method in ("GET", "HEAD"):
+        tok = request.cookies.get(COOKIE_NAME)
+        if tok:
+            try:
+                auth_mod.decode_token(tok)
+                return True
+            except Exception:
+                return False
+    return False
+
 
 @app.middleware("http")
 async def security_headers(request: Request, call_next):
+    _p = request.url.path
+    if (_p.startswith("/api/") and _p not in _PUBLIC_API
+            and request.method != "OPTIONS"
+            and not _guard_ok(request)):
+        return JSONResponse({"detail": "authentication required"}, status_code=401)
     response = await call_next(request)
+    # --- Foydalanuvchi harakati auditi -------------------------------------- #
+    try:
+        method = request.method
+        path = request.url.path
+        if method != "OPTIONS" and _should_audit(method, path):
+            uname, role = _audit_identity(request)
+            try:
+                ip = get_remote_address(request)
+            except Exception:
+                ip = None
+            audit_mod.log_action(
+                uname, role, _audit_action(method, path),
+                method=method, path=path,
+                status=getattr(response, "status_code", None), ip=ip,
+            )
+    except Exception:
+        pass
     response.headers["X-Content-Type-Options"] = "nosniff"
-    response.headers["X-Frame-Options"] = "DENY"
     response.headers["Referrer-Policy"] = "no-referrer"
     response.headers["Permissions-Policy"] = "interest-cohort=()"
-    response.headers["Content-Security-Policy"] = _CSP
+    if request.url.path.startswith("/mentor"):
+        response.headers["Content-Security-Policy"] = _CSP_MENTOR
+    elif request.url.path.startswith(("/server", "/iqttalim", "/harakat")):
+        pass  # proxylangan ilovalar o'z CSP/X-Frame headerlarini o'zi yuboradi
+    else:
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["Content-Security-Policy"] = _CSP
+    # Frontend statikasi (app.js/style.css/index.html) brauzerда eskirib qolmasligi
+    # uchun har doim qayta tekshirilsin. ETag/Last-Modified bor — o'zgarmasa 304 (tez),
+    # o'zgargan bo'lsa yangi fayl darrov keladi (hard-refresh shart emas).
+    _path = request.url.path
+    if _path == "/" or _path.endswith((".js", ".css", ".html")):
+        response.headers["Cache-Control"] = "no-cache, must-revalidate"
     return response
 
 
@@ -172,11 +441,25 @@ class LoginBody(BaseModel):
 
 @app.post("/api/auth/login")
 @limiter.limit("10/minute")
-def auth_login(request: Request, body: LoginBody):
+def auth_login(request: Request, body: LoginBody, response: Response):
     user = auth_mod.get_user_by_username(body.username)
     if not user or not user.get("is_active"):
         raise HTTPException(401, "invalid credentials")
+    # Akkaunt bo'yicha qulf (IP'ga bog'liq emas — X-Forwarded-For spoofing'dan himoya)
+    left = auth_mod.lock_seconds_left(user)
+    if left > 0:
+        raise HTTPException(
+            status_code=429,
+            detail=f"Juda ko'p xato urinish. Akkaunt vaqtincha qulflandi — "
+                   f"{left // 60 + 1} daqiqadan keyin urinib ko'ring.",
+        )
     if not auth_mod.verify_password(body.password, user["password_hash"]):
+        locked = auth_mod.record_failed_login(body.username)
+        if locked:
+            raise HTTPException(
+                status_code=429,
+                detail=f"Juda ko'p xato urinish. Akkaunt {locked // 60} daqiqaga qulflandi.",
+            )
         raise HTTPException(401, "invalid credentials")
     if user.get("totp_enrolled"):
         if not body.totp_code:
@@ -185,16 +468,36 @@ def auth_login(request: Request, body: LoginBody):
                 detail={"error": "totp_required", "message": "TOTP kodi kerak"},
             )
         if not auth_mod.verify_totp(user.get("totp_secret"), body.totp_code):
+            locked = auth_mod.record_failed_login(body.username)
+            if locked:
+                raise HTTPException(
+                    status_code=429,
+                    detail=f"Juda ko'p xato urinish. Akkaunt {locked // 60} daqiqaga qulflandi.",
+                )
             raise HTTPException(401, "invalid TOTP code")
+    auth_mod.reset_failed_login(body.username)
     auth_mod.update_last_login(user["id"])
     token, exp = auth_mod.issue_token(user)
     pub = auth_mod.public_user(user)
     pub["totp_setup_required"] = auth_mod.needs_totp_setup(user)
+    # HttpOnly cookie — <img src> rasm yuklashlari uchun (JS o'qiy olmaydi).
+    # Muddati JWT bilan bir xil; GET-only qabul qilingani uchun CSRF xavfsiz.
+    response.set_cookie(
+        COOKIE_NAME, token, max_age=int(auth_mod.TOKEN_TTL.total_seconds()),
+        httponly=True, secure=True, samesite="lax", path="/",
+    )
     return {
         "token": token,
         "expires_at": exp,
         "user": pub,
     }
+
+
+@app.post("/api/auth/logout")
+def auth_logout(response: Response):
+    # HttpOnly cookie'ni faqat server o'chira oladi.
+    response.delete_cookie(COOKIE_NAME, path="/")
+    return {"ok": True}
 
 
 @app.get("/api/settings")
@@ -294,8 +597,10 @@ def auth_change_password(
     row = auth_mod.get_user_by_username(user["sub"])
     if not row or not auth_mod.verify_password(body.current_password, row["password_hash"]):
         raise HTTPException(401, "current password incorrect")
-    if len(body.new_password) < 4:
-        raise HTTPException(400, "new password too short")
+    try:
+        auth_mod.validate_password_strength(body.new_password)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
     auth_mod.update_password(user["sub"], body.new_password)
     return {"ok": True}
 
@@ -322,8 +627,10 @@ def admin_create_user(
         raise HTTPException(400, f"role must be one of {auth_mod.ROLES}")
     if not body.username or not body.username.strip():
         raise HTTPException(400, "username required")
-    if len(body.password) < 4:
-        raise HTTPException(400, "password too short (min 4)")
+    try:
+        auth_mod.validate_password_strength(body.password)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
     if auth_mod.get_user_by_username(body.username):
         raise HTTPException(409, "username already exists")
     user = auth_mod.create_user(
@@ -390,8 +697,10 @@ def admin_reset_password(
 ):
     if not auth_mod.get_user_by_username(username):
         raise HTTPException(404, "user not found")
-    if len(body.new_password) < 4:
-        raise HTTPException(400, "password too short (min 4)")
+    try:
+        auth_mod.validate_password_strength(body.new_password)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
     auth_mod.update_password(username, body.new_password)
     return {"ok": True}
 
@@ -403,8 +712,11 @@ def admin_delete_user(
 ):
     if username == admin.get("sub"):
         raise HTTPException(400, "cannot delete yourself")
-    if not auth_mod.get_user_by_username(username):
+    row = auth_mod.get_user_by_username(username)
+    if not row:
         raise HTTPException(404, "user not found")
+    audit_mod.trash_db_row("users", dict(row), "user", username,
+                           label=f"Foydalanuvchi: {username}", deleted_by=admin.get("sub"))
     with db_mod.get_conn() as c:
         c.execute("DELETE FROM users WHERE username = ?", (username,))
         c.commit()
@@ -416,6 +728,7 @@ _UPLOAD_CHUNK = 1024 * 1024  # 1 MB
 
 @app.post("/api/upload")
 async def upload(
+    background_tasks: BackgroundTasks,
     files: list[UploadFile] = File(...),
     _user: dict = Depends(auth_mod.require_user),
 ):
@@ -434,6 +747,22 @@ async def upload(
         except Exception as e:
             out.unlink(missing_ok=True)
             raise HTTPException(status_code=400, detail=f"{f.filename}: not a valid DICOM ({e})")
+
+        # Avtomatik anonimlashtirish: PHI tag'lari tozalanadi va fayl qayta yoziladi.
+        # Box/annotation va export PHI-siz fayl ustida bajariladi.
+        deidentified_now = False
+        if AUTO_DEIDENTIFY:
+            try:
+                deid.anonymize_in_place(out)
+                ds = pydicom.dcmread(out, stop_before_pixels=True, force=True)
+                deidentified_now = True
+            except Exception as e:
+                out.unlink(missing_ok=True)
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"{f.filename}: anonymization failed ({e})",
+                )
+
         rows = int(getattr(ds, "Rows", 0) or 0)
         cols = int(getattr(ds, "Columns", 0) or 0)
         info = {
@@ -450,7 +779,16 @@ async def upload(
             "has_pixels": bool(rows and cols),
             "annotation_count": 0,
             "original_name": f.filename,
+            "deidentified": deidentified_now,
         }
+
+        # (A1) Avtomatik AI inference — endi BACKGROUND task (upload bloklanmaydi).
+        # Foydalanuvchi DICOM'ni darhol ko'radi; bbox'lar 10-20 sek ichida paydo bo'ladi.
+        if AUTO_INFER_ON_UPLOAD and rows and cols:
+            background_tasks.add_task(_auto_infer_uploaded, file_id, out, rows, cols)
+            info["ai_inference"] = {"queued": True, "model": AUTO_INFER_MODEL or "default"}
+            info["annotation_count"] = 0  # hali fonda hisoblanmoqda
+
         saved.append(info)
     return {"files": saved}
 
@@ -474,6 +812,1667 @@ def metadata(file_id: str):
     if not p.exists():
         raise HTTPException(404)
     return read_metadata(p)
+
+
+# --------------------------------------------------------------------------- #
+# Annotation bo'lgan fayllarni boshqa papkaga eksport (copy)                     #
+# --------------------------------------------------------------------------- #
+class ExportAnnotatedBody(BaseModel):
+    destination: str                          # mutlaq yo'l
+    source_kind: str = "upload"                # "upload" | "local" | "both"
+    require_annotations: bool = True           # eng kamida 1 ta annotation kerakmi
+    require_human: bool = False                # AI emas, qo'lda yaratilganlar
+    statuses: Optional[list[str]] = None       # status filtri
+    include_annotation_json: bool = True       # JSON sidecar ham
+    organize_by: str = "flat"                  # "flat" | "by_patient" | "by_status"
+    overwrite: bool = False
+
+
+def _filter_annotations(anns: list[dict], body: ExportAnnotatedBody) -> bool:
+    """Berilgan annotation ro'yxati filtrlardan o'tadimi."""
+    if not anns:
+        return not body.require_annotations
+    if body.require_human:
+        if not any(not str(a.get("created_by", "")).startswith("ai:") for a in anns):
+            return False
+    if body.statuses:
+        if not any(a.get("status") in body.statuses for a in anns):
+            return False
+    return True
+
+
+def _validate_export_dest(dest_str: str, allow_subtrees: tuple = ()) -> Path:
+    """Eksport maqsad papkasini xavfsizlik uchun tekshiradi.
+    Taqiqlangan: sistem papkalari VA ilovaning o'z daraxti (/app/app —
+    kod, DB, modellar, uploads, annotations). Aks holda past-huquqli
+    foydalanuvchi ilova fayllarini almashtirishi yoki volume'ni to'ldirishi mumkin edi.
+    allow_subtrees — app daraxti ichida ruxsat berilgan istisnolar (mas. training_data)."""
+    if not dest_str:
+        raise HTTPException(400, "destination yo'l bo'sh")
+    dest = Path(dest_str)
+    try:
+        rp = dest.resolve()
+    except Exception:
+        raise HTTPException(400, "noto'g'ri destination yo'li")
+    # Sistem papkalari (symlink orqali ham chetlab o'tib bo'lmasin — resolve'dan keyin)
+    forbidden = ["/etc", "/usr", "/bin", "/sbin", "/lib", "/lib64", "/boot",
+                 "/sys", "/proc", "/dev", "/root", "/var/lib", "/var/run", "/run"]
+    low = str(rp).lower()
+    if low.startswith(("c:\\windows", "c:\\program files")) or \
+       any(low == x or low.startswith(x + "/") for x in forbidden):
+        raise HTTPException(400, f"Bu papkaga yozish taqiqlangan: {rp}")
+    # Ruxsat berilgan istisno subtree (mas. training_data) — app-root taqiqidan ozod
+    for a in allow_subtrees:
+        ar = Path(a).resolve()
+        if rp == ar or ar in rp.parents:
+            return dest
+    # Ilovaning o'z daraxtiga (kod/DB/modellar/uploads/annotations) yozish taqiqlangan
+    app_root = BASE_DIR.resolve()
+    if rp == app_root or app_root in rp.parents:
+        raise HTTPException(400, "Ilova papkasi ichiga eksport qilib bo'lmaydi")
+    return dest
+
+
+@app.post("/api/export/annotated")
+def export_annotated(
+    body: ExportAnnotatedBody,
+    _user: dict = Depends(auth_mod.require_role("admin", "reviewer")),
+):
+    """Annotation bor (yoki belgilangan status'dagi) fayllarni boshqa papkaga ko'chiradi.
+    Asl fayllar joyida qoladi (copy). Annotation JSON sidecar ixtiyoriy.
+    Faqat admin/reviewer — past-huquqli annotator ixtiyoriy papkaga yoza olmasin."""
+    import shutil
+
+    dest = _validate_export_dest((body.destination or "").strip())
+    try:
+        dest.mkdir(parents=True, exist_ok=True)
+    except Exception as e:
+        raise HTTPException(400, f"Papka yaratib bo'lmadi: {e}")
+    if not dest.is_dir():
+        raise HTTPException(400, "destination papka emas")
+
+    copied: list[dict] = []
+    skipped: list[dict] = []
+    no_anns: list[str] = []
+
+    def process(file_id: str, dcm_path: Path, source: str):
+        ann_path = annot_store._annot_path(ANNOT_DIR, source, file_id)
+        anns: list[dict] = []
+        if ann_path.exists():
+            try:
+                data = json.loads(ann_path.read_text(encoding="utf-8"))
+                anns = data.get("annotations") or []
+            except Exception:
+                anns = []
+        if not _filter_annotations(anns, body):
+            if body.require_annotations:
+                no_anns.append(file_id)
+            return
+
+        # Maqsad katalogni aniqlash
+        target_dir = dest
+        if body.organize_by == "by_patient":
+            try:
+                ds = pydicom.dcmread(str(dcm_path), stop_before_pixels=True, force=True)
+                pid = str(getattr(ds, "PatientID", "") or "").strip() or "ANON"
+                pid = re.sub(r"[^A-Za-z0-9_-]+", "_", pid)
+                target_dir = dest / pid
+            except Exception:
+                target_dir = dest / "UNKNOWN"
+        elif body.organize_by == "by_status":
+            # Birinchi annotationning statusiga ko'ra
+            st = (anns[0].get("status") if anns else None) or "no_status"
+            st = re.sub(r"[^A-Za-z0-9_-]+", "_", str(st))
+            target_dir = dest / st
+        target_dir.mkdir(parents=True, exist_ok=True)
+
+        target = target_dir / f"{file_id}.dcm"
+        if target.exists() and not body.overwrite:
+            skipped.append({"id": file_id, "reason": "exists"})
+            return
+        try:
+            shutil.copy2(dcm_path, target)
+        except Exception as e:
+            skipped.append({"id": file_id, "reason": f"copy_failed: {e}"})
+            return
+        ann_copied = False
+        if body.include_annotation_json and ann_path.exists():
+            try:
+                shutil.copy2(ann_path, target_dir / ann_path.name)
+                ann_copied = True
+            except Exception:
+                pass
+        copied.append({
+            "id": file_id, "target": str(target),
+            "annotations": len(anns), "annotation_json": ann_copied,
+        })
+
+    # Upload'lar
+    if body.source_kind in ("upload", "both"):
+        for dcm in sorted(UPLOAD_DIR.glob("*.dcm")):
+            process(dcm.stem, dcm, "upload")
+
+    # Local DICOM'lar — annotation papkasiga "local__" prefix bilan
+    if body.source_kind in ("local", "both"):
+        for ann_path in sorted(ANNOT_DIR.glob("local__*.json")):
+            file_id = ann_path.stem.replace("local__", "", 1)
+            # Lokal yo'lni qayta tiklab bo'lmaydi (annotatsiya nomida hash) —
+            # bu rejim faqat upload uchun ishonchli; lokal uchun keyin yaxshilanadi.
+            no_anns.append(f"local:{file_id} (lokal eksport hozircha qo'llab-quvvatlanmaydi)")
+
+    return {
+        "destination": str(dest),
+        "copied_count": len(copied),
+        "skipped_count": len(skipped),
+        "no_annotations_count": len(no_anns),
+        "copied": copied[:200],
+        "skipped": skipped[:50],
+    }
+
+
+# --------------------------------------------------------------------------- #
+# Training dataset tayyorlash — YOLO formati (Ultralytics)                     #
+# --------------------------------------------------------------------------- #
+# Training run holatlarini xotirada saqlash (process'lar ro'yxati)
+TRAINING_RUNS: dict = {}  # run_id -> {status, log_path, started_at, finished_at, dest_path, last_metrics}
+
+def _training_log_path(run_id: str) -> Path:
+    d = BASE_DIR / "training_runs"
+    d.mkdir(exist_ok=True)
+    return d / f"{run_id}.log"
+
+
+# Run tarixi diskka saqlanadi (app_db volume) — restart/logout'dan keyin ham qoladi.
+TRAINING_RUNS_FILE = BASE_DIR / "training_runs" / "_index.json"
+
+
+def _save_training_runs() -> None:
+    """TRAINING_RUNS indeksini diskka atomik yozadi. _last_log tashlanadi
+    (log matni alohida .log faylda saqlanadi)."""
+    try:
+        TRAINING_RUNS_FILE.parent.mkdir(parents=True, exist_ok=True)
+        slim = {
+            rid: {k: v for k, v in st.items() if k not in ("_last_log",)}
+            for rid, st in TRAINING_RUNS.items()
+        }
+        tmp = TRAINING_RUNS_FILE.with_name("_index.json.tmp")
+        tmp.write_text(json.dumps(slim, ensure_ascii=False, default=str), encoding="utf-8")
+        tmp.replace(TRAINING_RUNS_FILE)
+    except Exception:
+        pass
+
+
+def _load_training_runs() -> None:
+    """Startupda saqlangan run tarixini xotiraga yuklaydi va indeksdagi
+    ro'yxatdan tashqari disk'dagi eski runlarni (log fayl/papkalardan) tiklaydi."""
+    try:
+        if TRAINING_RUNS_FILE.exists():
+            data = json.loads(TRAINING_RUNS_FILE.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                for rid, st in data.items():
+                    if isinstance(st, dict):
+                        # Restartdan keyin lokal subprocess yo'q — "running" eski
+                        # lokal runlarni "uzilgan" deb belgilaymiz (remote o'zini tuzatadi)
+                        if st.get("status") == "running" and not st.get("remote"):
+                            st["status"] = "interrupted"
+                        TRAINING_RUNS[rid] = st
+    except Exception:
+        pass
+    # Indeksda yo'q, lekin disk'da log/papka bor eski runlarni tiklash
+    try:
+        runs_dir = BASE_DIR / "training_runs"
+        for log_file in runs_dir.glob("*.log"):
+            rid = log_file.stem
+            if rid in TRAINING_RUNS:
+                continue
+            entry = {
+                "run_id": rid,
+                "status": "recovered",
+                "recovered": True,
+                "log_path": str(log_file),
+                "project_dir": str(runs_dir / rid),
+            }
+            try:
+                entry["started_at"] = datetime.fromtimestamp(
+                    log_file.stat().st_mtime, tz=timezone.utc).isoformat()
+            except Exception:
+                pass
+            # Metrikalar — results.csv (mavjud bo'lsa)
+            try:
+                rows = _read_results_csv(runs_dir / rid)
+                if rows:
+                    entry["last_metrics"] = rows[-1]
+                    entry["epochs_done"] = len(rows)
+            except Exception:
+                pass
+            # Status — log mazmunidan taxmin
+            try:
+                tail = log_file.read_text(encoding="utf-8", errors="replace")[-3000:]
+                if "# DONE" in tail or "model_deployed" in tail or "Deploy:" in tail:
+                    entry["status"] = "done"
+                elif "FAILED" in tail or "Traceback" in tail:
+                    entry["status"] = "failed"
+                elif "STOPPED" in tail:
+                    entry["status"] = "stopped"
+            except Exception:
+                pass
+            TRAINING_RUNS[rid] = entry
+    except Exception:
+        pass
+    _save_training_runs()
+
+
+# Ishlab turgan training subprocess'lar: run_id -> subprocess.Popen
+TRAIN_PROCS: dict = {}
+
+
+def _kill_proc_tree(pid: int) -> None:
+    """Jarayon va uning bolalarini majburan to'xtatish (Windows: taskkill /T)."""
+    if os.name == "nt":
+        subprocess.run(
+            ["taskkill", "/PID", str(pid), "/T", "/F"],
+            capture_output=True, text=True,
+        )
+    else:
+        import signal as _sig
+        try:
+            os.killpg(os.getpgid(pid), _sig.SIGTERM)
+        except Exception:
+            try:
+                os.kill(pid, _sig.SIGTERM)
+            except Exception:
+                pass
+
+
+def _monitor_training(run_id: str, proc: "subprocess.Popen", logf) -> None:
+    """Subprocess tugashini kutadi va status.json'dan yakuniy holatni o'qiydi."""
+    rc = proc.wait()
+    try:
+        logf.close()
+    except Exception:
+        pass
+    state = TRAINING_RUNS.get(run_id, {})
+    project_dir = Path(state.get("project_dir") or (BASE_DIR / "training_runs" / run_id))
+    final: dict = {}
+    status_json = project_dir / "status.json"
+    if status_json.exists():
+        try:
+            final = json.loads(status_json.read_text(encoding="utf-8"))
+        except Exception:
+            final = {}
+    for k in ("status", "best_pt", "model_deployed", "last_metrics", "error", "error_warning"):
+        if k in final:
+            state[k] = final[k]
+    if state.get("_stop_requested"):
+        state["status"] = "stopped"
+    elif "status" not in final or final.get("status") == "running":
+        # status.json yo'q yoki yarim — jarayon kutilmaganda tugagan
+        state["status"] = "failed" if rc != 0 else "done"
+    state["return_code"] = rc
+    state["finished_at"] = datetime.now(timezone.utc).isoformat()
+    state.pop("_stop_requested", None)
+    TRAINING_RUNS[run_id] = state
+    _save_training_runs()
+    TRAIN_PROCS.pop(run_id, None)
+
+
+def _launch_training(run_id: str, params: dict) -> None:
+    """Training'ni alohida subprocess sifatida ishga tushiradi (Stop mumkin bo'lishi uchun).
+
+    REMOTE_TRAIN_URL o'rnatilgan bo'lsa — lokal subprocess o'rniga GPU serverga
+    (remote_train) jo'natiladi."""
+    project_dir = BASE_DIR / "training_runs" / run_id
+    project_dir.mkdir(parents=True, exist_ok=True)
+    log_path = _training_log_path(run_id)
+
+    # --- Masofaviy (GPU server) yo'li -------------------------------------- #
+    if remote_train.ENABLED:
+        state = TRAINING_RUNS.get(run_id, {})
+        try:
+            remote_train.submit(run_id, params, str(inf.MODELS_DIR))
+            log_path.write_text("# Masofaviy GPU serverga jo'natildi: "
+                                f"{remote_train.REMOTE_URL}\n", encoding="utf-8")
+            state.update({
+                "status": "running",
+                "started_at": datetime.now(timezone.utc).isoformat(),
+                "log_path": str(log_path),
+                "project_dir": str(project_dir),
+                "params": params,
+                "remote": True,
+                "remote_url": remote_train.REMOTE_URL,
+            })
+        except Exception as e:  # noqa: BLE001
+            log_path.write_text(f"# Masofaviy training XATO: {e}\n", encoding="utf-8")
+            state.update({
+                "status": "failed",
+                "error": f"Masofaviy GPU serverga jo'natib bo'lmadi: {e}",
+                "started_at": datetime.now(timezone.utc).isoformat(),
+                "finished_at": datetime.now(timezone.utc).isoformat(),
+                "log_path": str(log_path),
+                "project_dir": str(project_dir),
+                "params": params,
+                "remote": True,
+            })
+        TRAINING_RUNS[run_id] = state
+        _save_training_runs()
+        return
+    # --- Lokal subprocess yo'li (eski xatti-harakat) ---------------------- #
+
+    worker_params = dict(params)
+    worker_params["run_id"] = run_id
+    worker_params["project_dir"] = str(project_dir)
+    worker_params["models_dir"] = str(inf.MODELS_DIR)
+    params_path = project_dir / "params.json"
+    params_path.write_text(json.dumps(worker_params, ensure_ascii=False), encoding="utf-8")
+
+    logf = open(log_path, "w", encoding="utf-8", buffering=1)
+    creationflags = subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0
+    proc = subprocess.Popen(
+        [sys.executable, "-m", "app.train_worker", str(params_path)],
+        cwd=str(BASE_DIR.parent),
+        stdout=logf,
+        stderr=subprocess.STDOUT,
+        creationflags=creationflags,
+    )
+    TRAIN_PROCS[run_id] = proc
+    state = TRAINING_RUNS.get(run_id, {})
+    state.update({
+        "status": "running",
+        "started_at": datetime.now(timezone.utc).isoformat(),
+        "log_path": str(log_path),
+        "pid": proc.pid,
+        "project_dir": str(project_dir),
+        "params": params,
+    })
+    TRAINING_RUNS[run_id] = state
+    _save_training_runs()
+    threading.Thread(target=_monitor_training, args=(run_id, proc, logf), daemon=True).start()
+
+
+def _deploy_remote_model(run_id: str, state: dict) -> None:
+    """Masofaviy training tugagach best.pt'ni yuklab olib MODELS_DIR'ga joylaydi."""
+    params = state.get("params", {})
+    if not params.get("deploy_after", True):
+        return
+    name_suffix = params.get("project_name") or run_id
+    safe_suffix = re.sub(r"[^A-Za-z0-9_-]+", "_", name_suffix)
+    inf.MODELS_DIR.mkdir(parents=True, exist_ok=True)
+    target = inf.MODELS_DIR / f"trained_{safe_suffix}.pt"
+    data = remote_train.download_best(run_id)
+    target.write_bytes(data)
+    state["model_deployed"] = str(target)
+    state["best_pt"] = str(target)
+
+
+def _remote_status(run_id: str, state: dict, tail: int) -> dict:
+    """GPU serverdan statusni oladi, results.csv/log'ni lokal'ga ko'chiradi
+    (mavjud metrics/plots endpointlari ishlashi uchun) va tugaganda modelni tortadi."""
+    project_dir = Path(state.get("project_dir") or (BASE_DIR / "training_runs" / run_id))
+    try:
+        rs = remote_train.status(run_id, tail)
+    except Exception as e:  # noqa: BLE001
+        # Server vaqtincha javob bermasa — oxirgi ma'lum holatni qaytaramiz
+        out = {k: v for k, v in state.items() if k != "_stop_requested"}
+        out["log_tail"] = (state.get("_last_log") or []) + [f"[masofaviy status xato] {e}"]
+        return {"run_id": run_id, **out}
+
+    # results.csv'ni lokal'ga oynalash (grafiklar uchun)
+    rcsv = rs.get("results_csv")
+    if rcsv:
+        td = project_dir / "train"
+        td.mkdir(parents=True, exist_ok=True)
+        try:
+            (td / "results.csv").write_text(rcsv, encoding="utf-8")
+        except Exception:
+            pass
+
+    log_tail = rs.get("log_tail") or []
+    state["_last_log"] = log_tail
+    lp = state.get("log_path")
+    if lp:
+        try:
+            Path(lp).write_text("\n".join(log_tail), encoding="utf-8")
+        except Exception:
+            pass
+
+    remote_status = rs.get("status", "running")
+    state["is_alive"] = bool(rs.get("is_alive"))
+
+    # Jonli metrikalar — oynalangan results.csv'dan
+    live = _read_results_csv(project_dir)
+    if live:
+        state["last_metrics"] = live[-1]
+        state["epochs_done"] = len(live)
+    elif rs.get("last_metrics"):
+        state["last_metrics"] = rs["last_metrics"]
+
+    if rs.get("error"):
+        state["error"] = rs["error"]
+
+    # Tugagan bo'lsa — modelni bir marta tortib olamiz
+    if remote_status == "done" and not state.get("_deployed"):
+        try:
+            _deploy_remote_model(run_id, state)
+            state["_deployed"] = True
+        except Exception as e:  # noqa: BLE001
+            state["deploy_error"] = f"Model yuklab olinmadi: {e}"
+    if state.get("_stop_requested") and remote_status in ("running", "stopping"):
+        state["status"] = "stopping"
+    else:
+        state["status"] = remote_status
+    if remote_status in ("done", "failed", "stopped"):
+        state.setdefault("finished_at", datetime.now(timezone.utc).isoformat())
+
+    TRAINING_RUNS[run_id] = state
+    _save_training_runs()
+    out = {k: v for k, v in state.items() if k not in ("_stop_requested", "_last_log")}
+    return {"run_id": run_id, **out, "log_tail": log_tail}
+
+
+class TrainingRunBody(BaseModel):
+    data_yaml: str
+    base_model: str = "yolo11n.pt"
+    epochs: int = 50
+    imgsz: int = 1024
+    batch: int = 8
+    deploy_after: bool = True
+    # Kengaytirilgan parametrlar (ixtiyoriy)
+    optimizer: str = "auto"          # SGD | Adam | AdamW | auto
+    lr0: float = 0.01                # Boshlang'ich LR
+    lrf: float = 0.01                # Yakuniy LR (lr0 * lrf)
+    momentum: float = 0.937
+    weight_decay: float = 0.0005
+    warmup_epochs: float = 3.0
+    patience: int = 50               # Early stopping
+    seed: int = 0
+    cos_lr: bool = False              # Cosine LR scheduler
+    pretrained: bool = True           # False = scratch'dan
+    resume: Optional[str] = None      # Run ID dan davom ettirish
+    # Augmentation
+    hsv_h: float = 0.015
+    hsv_s: float = 0.7
+    hsv_v: float = 0.4
+    fliplr: float = 0.5
+    flipud: float = 0.0
+    scale: float = 0.5
+    mosaic: float = 1.0
+    mixup: float = 0.0
+    # Boshqalar
+    workers: int = 4
+    cache: str = "False"              # "False" | "ram" | "disk"
+    device: str = ""                  # "" auto, "cpu", "0", "0,1"
+    project_name: Optional[str] = None  # foydalanuvchi bergan nom
+    dataset_name: Optional[str] = None  # GPU'da oldindan yuklangan dataset nomi (remote tez-start)
+
+
+@app.post("/api/training/run")
+def training_run(
+    body: TrainingRunBody,
+    _user: dict = Depends(auth_mod.require_user),
+):
+    """YOLO o'qitishni boshlaydi. Run ID qaytaradi.
+    Masofaviy GPU yoqilgan bo'lsa — avval GPU server tirikligi tekshiriladi."""
+    if not Path(body.data_yaml).exists():
+        raise HTTPException(400, f"data.yaml topilmadi: {body.data_yaml}")
+    # Masofaviy GPU server: training boshlashdan oldin tirikligini tekshiramiz
+    if remote_train.ENABLED:
+        try:
+            h = remote_train.health()
+        except Exception as e:  # noqa: BLE001
+            raise HTTPException(503,
+                f"GPU server ({remote_train.REMOTE_URL}) javob bermayapti — "
+                f"training boshlanmadi. Server yoqilganini tekshiring. ({e})")
+        if not h.get("cuda"):
+            raise HTTPException(503,
+                "GPU serverga ulanildi, lekin GPU/CUDA topilmadi — training boshlanmadi.")
+    run_id = "tr" + datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S") + "_" + uuid.uuid4().hex[:6]
+    TRAINING_RUNS[run_id] = {"status": "queued", "queued_at": datetime.now(timezone.utc).isoformat(), "params": body.model_dump()}
+    _save_training_runs()
+    _launch_training(run_id, body.model_dump())
+    return {"run_id": run_id, "status": "running"}
+
+
+@app.post("/api/training/stop/{run_id}")
+def training_stop(run_id: str, _user: dict = Depends(auth_mod.require_user)):
+    """Ishlab turgan training subprocess'ni to'xtatadi. last.pt saqlanib qoladi
+    (keyinroq Resume bilan davom ettirsa bo'ladi)."""
+    state = TRAINING_RUNS.get(run_id)
+    if not state:
+        raise HTTPException(404, f"Run topilmadi: {run_id}")
+    if state.get("remote"):
+        if state.get("status") in ("done", "failed", "stopped"):
+            raise HTTPException(409, "Run allaqachon tugagan")
+        state["_stop_requested"] = True
+        try:
+            remote_train.stop(run_id)
+        except Exception as e:  # noqa: BLE001
+            raise HTTPException(502, f"Masofaviy to'xtatish xatosi: {e}")
+        state["status"] = "stopping"
+        TRAINING_RUNS[run_id] = state
+        _save_training_runs()
+        return {"run_id": run_id, "status": "stopping"}
+    proc = TRAIN_PROCS.get(run_id)
+    if proc is None or proc.poll() is not None:
+        raise HTTPException(409, "Run hozir ishlamayapti (allaqachon tugagan)")
+    state["_stop_requested"] = True
+    _kill_proc_tree(proc.pid)
+    return {"run_id": run_id, "status": "stopping"}
+
+
+# Mavjud datasetlarni topish (data.yaml'lar)
+@app.get("/api/training/datasets")
+def training_datasets(_user: dict = Depends(auth_mod.require_user)):
+    """Mavjud data.yaml fayllarni qidiradi (foydalanuvchi tanlashi uchun)."""
+    candidates: list[dict] = []
+    search_roots = []
+    # Loyiha papkasi ostida
+    search_roots.append(BASE_DIR.parent)
+    # Lokal disklar
+    for d in ("D:/datasets", "C:/datasets", "/datasets", "/srv/datasets"):
+        if Path(d).is_dir():
+            search_roots.append(Path(d))
+    seen = set()
+    for root in search_roots:
+        if not root.is_dir():
+            continue
+        try:
+            for yml in list(root.glob("**/data.yaml"))[:200]:
+                if str(yml) in seen:
+                    continue
+                seen.add(str(yml))
+                try:
+                    size = yml.stat().st_size
+                    parent = yml.parent
+                    train_n = len(list((parent / "images/train").glob("*"))) if (parent / "images/train").is_dir() else 0
+                    val_n = len(list((parent / "images/val").glob("*"))) if (parent / "images/val").is_dir() else 0
+                except Exception:
+                    train_n = val_n = size = 0
+                candidates.append({
+                    "yaml": str(yml),
+                    "dir": str(yml.parent),
+                    "train_count": train_n,
+                    "val_count": val_n,
+                    "size_bytes": size,
+                })
+        except Exception:
+            continue
+    candidates.sort(key=lambda x: -(x["train_count"] + x["val_count"]))
+    return {"datasets": candidates[:50]}
+
+
+# Mavjud base model fayllarini ro'yxati (foydalanuvchi tanlashi uchun)
+@app.get("/api/training/base_models")
+def training_base_models(_user: dict = Depends(auth_mod.require_user)):
+    """Ultralytics tomonidan tanish base modellar + lokal trained_*'lar."""
+    suggested = [
+        {"name": "yolo11n.pt", "label": "YOLO11 Nano — eng yengil", "size_hint_mb": 5},
+        {"name": "yolo11s.pt", "label": "YOLO11 Small", "size_hint_mb": 20},
+        {"name": "yolo11m.pt", "label": "YOLO11 Medium", "size_hint_mb": 40},
+        {"name": "yolo11l.pt", "label": "YOLO11 Large", "size_hint_mb": 50},
+        {"name": "yolo11x.pt", "label": "YOLO11 Extra — eng kuchli", "size_hint_mb": 120},
+        {"name": "yolov10n.pt", "label": "YOLOv10 Nano", "size_hint_mb": 5},
+        {"name": "yolov10x.pt", "label": "YOLOv10 Extra", "size_hint_mb": 64},
+        {"name": "yolov9c.pt", "label": "YOLOv9 Compact", "size_hint_mb": 50},
+        {"name": "yolov9e.pt", "label": "YOLOv9 Extra", "size_hint_mb": 110},
+        {"name": "yolov8n.pt", "label": "YOLOv8 Nano (klassik)", "size_hint_mb": 6},
+        {"name": "yolov8x.pt", "label": "YOLOv8 Extra", "size_hint_mb": 130},
+    ]
+    # Lokal modellar — fine-tune uchun
+    local_pts = []
+    for m in inf.list_models():
+        local_pts.append({
+            "name": m["name"],
+            "label": f"Lokal: {m['name']} ({m['size_bytes']/1e6:.1f} MB)",
+            "is_local": True,
+            "path": str(inf.MODELS_DIR / m["name"]),
+        })
+    return {"suggested": suggested, "local": local_pts}
+
+
+@app.get("/api/training/status/{run_id}")
+def training_status(run_id: str, tail: int = 200, _user: dict = Depends(auth_mod.require_user)):
+    state = TRAINING_RUNS.get(run_id)
+    if not state:
+        raise HTTPException(404, f"Run topilmadi: {run_id}")
+    if state.get("remote"):
+        return _remote_status(run_id, state, tail)
+    state = dict(state)
+    state.pop("_stop_requested", None)
+    proc = TRAIN_PROCS.get(run_id)
+    state["is_alive"] = bool(proc and proc.poll() is None)
+    # Ishlab turgan run uchun live oxirgi metrikalarni results.csv'dan o'qib qo'shamiz
+    if state.get("status") == "running":
+        live = _read_results_csv(Path(state.get("project_dir") or (BASE_DIR / "training_runs" / run_id)))
+        if live:
+            state["last_metrics"] = live[-1]
+            state["epochs_done"] = len(live)
+    log_lines: list[str] = []
+    log_path = state.get("log_path")
+    if log_path and Path(log_path).exists():
+        try:
+            content = Path(log_path).read_text(encoding="utf-8", errors="replace")
+            log_lines = content.splitlines()[-max(20, min(2000, tail)):]
+        except Exception:
+            pass
+    return {"run_id": run_id, **state, "log_tail": log_lines}
+
+
+@app.get("/api/training/runs")
+def training_list_runs(_user: dict = Depends(auth_mod.require_user)):
+    return {"runs": [{"run_id": k, **v} for k, v in sorted(TRAINING_RUNS.items(), reverse=True)]}
+
+
+def _read_results_csv(project_dir: Path) -> list[dict]:
+    """Ultralytics results.csv'ni per-epoch qatorlar (dict) ro'yxatiga aylantiradi.
+    Raqamli qiymatlar float'ga o'giriladi — grafiklar uchun."""
+    csv_path = next(iter(project_dir.rglob("results.csv")), None)
+    if not csv_path or not csv_path.exists():
+        return []
+    rows: list[dict] = []
+    try:
+        lines = csv_path.read_text(encoding="utf-8").splitlines()
+        if len(lines) < 2:
+            return []
+        headers = [h.strip() for h in lines[0].split(",")]
+        for ln in lines[1:]:
+            vals = [v.strip() for v in ln.split(",")]
+            if len(vals) != len(headers):
+                continue
+            row: dict = {}
+            for h, v in zip(headers, vals):
+                try:
+                    fv = float(v)
+                    # nan/inf JSON'ga mos emas (FastAPI rad etadi) -> None
+                    row[h] = fv if (fv == fv and fv not in (float("inf"), float("-inf"))) else None
+                except ValueError:
+                    row[h] = v
+            rows.append(row)
+    except Exception:
+        return []
+    return rows
+
+
+# Endi _read_results_csv aniqlangan — startupda run tarixini yuklaymiz/tiklaymiz
+_load_training_runs()
+
+
+@app.get("/api/training/metrics/{run_id}")
+def training_metrics(run_id: str, _user: dict = Depends(auth_mod.require_user)):
+    """Jonli grafiklar uchun: har epochdagi loss/mAP/precision/recall qatorlari."""
+    safe = re.sub(r"[^A-Za-z0-9_.-]", "", run_id)
+    project_dir = BASE_DIR / "training_runs" / safe
+    rows = _read_results_csv(project_dir)
+    return {"run_id": safe, "epochs": len(rows), "rows": rows}
+
+
+# --------------------------------------------------------------------------- #
+# O'qitishdan keyingi natijalar: plotlar, namuna bashoratlar, eksport, compare #
+# --------------------------------------------------------------------------- #
+# Har bir plot uchun nomzod fayl nomlari (Ultralytics versiyalari bo'yicha farqlanadi:
+# yangi versiyalar "Box" prefiksini qo'shadi — BoxPR_curve.png va h.k.).
+_PLOT_SPECS = [
+    ("results", ["results.png"]),
+    ("confusion_matrix", ["confusion_matrix.png"]),
+    ("confusion_matrix_normalized", ["confusion_matrix_normalized.png"]),
+    ("PR_curve", ["BoxPR_curve.png", "PR_curve.png"]),
+    ("F1_curve", ["BoxF1_curve.png", "F1_curve.png"]),
+    ("P_curve", ["BoxP_curve.png", "P_curve.png"]),
+    ("R_curve", ["BoxR_curve.png", "R_curve.png"]),
+    ("labels", ["labels.jpg"]),
+]
+
+
+@app.get("/api/training/plots/{run_id}")
+def training_plots(run_id: str, _user: dict = Depends(auth_mod.require_user)):
+    """Ultralytics o'qitish chiqargan grafiklar va namuna bashoratlar ro'yxati."""
+    safe = re.sub(r"[^A-Za-z0-9_.-]", "", run_id)
+    proj = BASE_DIR / "training_runs" / safe
+    available = []
+    for key, names in _PLOT_SPECS:
+        found = None
+        for nm in names:
+            found = next((p for p in proj.rglob(nm) if p.is_file()), None)
+            if found:
+                break
+        if found:
+            available.append({"key": key, "file": found.name})
+    preds = sorted(p.name for p in proj.rglob("val_batch*_pred.jpg") if p.is_file())[:8]
+    return {"run_id": safe, "plots": available, "predictions": preds}
+
+
+@app.get("/api/training/plot/{run_id}")
+def training_plot(run_id: str, name: str, _user: dict = Depends(auth_mod.require_user)):
+    """Bitta plot/bashorat rasmini uzatadi (auth talab qiladi)."""
+    safe = re.sub(r"[^A-Za-z0-9_.-]", "", run_id)
+    fname = os.path.basename(name)
+    proj = BASE_DIR / "training_runs" / safe
+    f = next((p for p in proj.rglob(fname) if p.is_file()), None)
+    if not f:
+        raise HTTPException(404, f"rasm topilmadi: {fname}")
+    media = "image/jpeg" if f.suffix.lower() in (".jpg", ".jpeg") else "image/png"
+    return FileResponse(str(f), media_type=media)
+
+
+# Eksport jobs: export_id -> holat
+EXPORT_JOBS: dict = {}
+_EXPORT_FMT = {"onnx": "onnx", "tensorrt": "engine", "openvino": "openvino"}
+
+
+def _run_export(export_id: str, run_id: str, fmt_key: str, imgsz: int, half: bool):
+    state = EXPORT_JOBS.get(export_id, {})
+    try:
+        proj = BASE_DIR / "training_runs" / run_id
+        best = next((p for p in proj.rglob("best.pt") if p.is_file()), None)
+        if best is None:
+            raise RuntimeError("best.pt topilmadi — avval o'qitishni yakunlang")
+        from ultralytics import YOLO
+        m = YOLO(str(best))
+        out = m.export(format=_EXPORT_FMT[fmt_key], imgsz=imgsz, half=half)
+        state["status"] = "done"
+        state["output"] = str(out)
+    except Exception as e:  # noqa: BLE001
+        state["status"] = "failed"
+        state["error"] = f"{type(e).__name__}: {e}"
+    state["finished_at"] = datetime.now(timezone.utc).isoformat()
+    EXPORT_JOBS[export_id] = state
+
+
+class ExportBody(BaseModel):
+    run_id: str
+    format: str = "onnx"   # onnx | tensorrt | openvino
+    imgsz: int = 640
+    half: bool = False
+
+
+@app.post("/api/training/export")
+def training_export(body: ExportBody, _user: dict = Depends(auth_mod.require_user)):
+    """Model'ni ONNX/TensorRT/OpenVINO formatiga eksport qilishni boshlaydi (fonda)."""
+    fmt = (body.format or "onnx").lower()
+    if fmt not in _EXPORT_FMT:
+        raise HTTPException(400, f"noma'lum format: {fmt}")
+    safe = re.sub(r"[^A-Za-z0-9_.-]", "", body.run_id)
+    export_id = "exp_" + datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S") + "_" + uuid.uuid4().hex[:6]
+    EXPORT_JOBS[export_id] = {
+        "status": "running", "run_id": safe, "format": fmt,
+        "started_at": datetime.now(timezone.utc).isoformat(),
+    }
+    threading.Thread(
+        target=_run_export,
+        args=(export_id, safe, fmt, int(body.imgsz or 640), bool(body.half)),
+        daemon=True,
+    ).start()
+    return {"export_id": export_id, "status": "running"}
+
+
+@app.get("/api/training/export/status/{export_id}")
+def training_export_status(export_id: str, _user: dict = Depends(auth_mod.require_user)):
+    state = EXPORT_JOBS.get(export_id)
+    if not state:
+        raise HTTPException(404, "eksport topilmadi")
+    out = dict(state)
+    if out.get("output"):
+        out["filename"] = os.path.basename(out["output"])
+    return {"export_id": export_id, **out}
+
+
+@app.get("/api/training/export/download/{export_id}")
+def training_export_download(export_id: str, _user: dict = Depends(auth_mod.require_user)):
+    state = EXPORT_JOBS.get(export_id)
+    if not state or state.get("status") != "done" or not state.get("output"):
+        raise HTTPException(404, "eksport hali tayyor emas")
+    out = Path(state["output"])
+    if out.is_dir():
+        # OpenVINO papkani zip qilib beramiz
+        import shutil
+        zpath = shutil.make_archive(str(out), "zip", str(out))
+        out = Path(zpath)
+    if not out.exists():
+        raise HTTPException(404, "eksport fayli topilmadi")
+    return FileResponse(
+        str(out), media_type="application/octet-stream",
+        headers={"Content-Disposition": f'attachment; filename="{out.name}"'},
+    )
+
+
+@app.get("/api/training/compare")
+def training_compare(runs: str, _user: dict = Depends(auth_mod.require_user)):
+    """Bir nechta run'ning yakuniy metrikalarini yonma-yon qaytaradi."""
+    ids = [re.sub(r"[^A-Za-z0-9_.-]", "", r) for r in runs.split(",") if r.strip()][:5]
+    out = []
+    for rid in ids:
+        proj = BASE_DIR / "training_runs" / rid
+        rows = _read_results_csv(proj)
+        fr = rows[-1] if rows else {}
+
+        def g(*keys):
+            for k in keys:
+                v = fr.get(k)
+                if isinstance(v, (int, float)):
+                    return round(float(v), 4)
+            return None
+
+        params = (TRAINING_RUNS.get(rid) or {}).get("params", {})
+        out.append({
+            "run_id": rid,
+            "epochs": len(rows),
+            "mAP50": g("metrics/mAP50(B)", "metrics/mAP_0.5"),
+            "mAP50_95": g("metrics/mAP50-95(B)", "metrics/mAP_0.5:0.95"),
+            "precision": g("metrics/precision(B)", "metrics/precision"),
+            "recall": g("metrics/recall(B)", "metrics/recall"),
+            "base_model": params.get("base_model"),
+            "imgsz": params.get("imgsz"),
+        })
+    return {"runs": out}
+
+
+# --------------------------------------------------------------------------- #
+# Rasm-darajali klinik baholash: Accuracy / Sensitivity / Specificity / F1    #
+# --------------------------------------------------------------------------- #
+# Obyekt-detektsiyada TN (true negative) box darajasida mavjud emas, shu bois
+# Specificity faqat RASM darajasida hisoblanadi: lezyonsiz rasm modelda ham
+# bo'sh chiqsa — TN. Bu mammografiya CAD adabiyotidagi standart yondashuv.
+EVAL_JOBS: dict = {}
+
+
+def _yolo_label_path(img: Path) -> Path:
+    """images/... yo'lidan mos labels/...txt yo'lini yasaydi (YOLO strukturasi)."""
+    parts = list(img.parts)
+    for i in range(len(parts) - 1, -1, -1):
+        if parts[i] == "images":
+            parts[i] = "labels"
+            break
+    return Path(*parts).with_suffix(".txt")
+
+
+def _eval_val_images(data_yaml: Path) -> list[Path]:
+    import yaml as _yaml
+    cfg = _yaml.safe_load(data_yaml.read_text(encoding="utf-8")) or {}
+    root = Path(str(cfg.get("path") or "."))
+    if not root.is_absolute():
+        root = (data_yaml.parent / root).resolve()
+    val = cfg.get("val") or "images/val"
+    vals = val if isinstance(val, list) else [val]
+    exts = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff"}
+    imgs: list[Path] = []
+    for v in vals:
+        vd = Path(str(v))
+        if not vd.is_absolute():
+            vd = root / vd
+        if vd.is_dir():
+            imgs.extend(p for p in sorted(vd.rglob("*")) if p.suffix.lower() in exts)
+    return imgs
+
+
+def _run_image_eval(run_id: str, conf: float) -> None:
+    state = EVAL_JOBS[run_id]
+    try:
+        run_state = TRAINING_RUNS.get(run_id) or {}
+        params = run_state.get("params", {})
+        proj = BASE_DIR / "training_runs" / run_id
+        # Model: deploy qilingan .pt yoki run papkasidagi best.pt
+        model_path = run_state.get("best_pt") or run_state.get("model_deployed")
+        if not (model_path and Path(model_path).exists()):
+            bp = next((p for p in proj.rglob("best.pt") if p.is_file()), None)
+            model_path = str(bp) if bp else None
+        if not model_path:
+            raise RuntimeError("model topilmadi (best.pt yuklab olinmagan / deploy qilinmagan)")
+        data_yaml = Path(str(params.get("data_yaml") or ""))
+        if not data_yaml.exists():
+            raise RuntimeError(f"data.yaml topilmadi: {data_yaml}")
+        imgs = _eval_val_images(data_yaml)
+        if not imgs:
+            raise RuntimeError("val to'plamida rasm topilmadi")
+        state["total"] = len(imgs)
+        from ultralytics import YOLO
+        model = YOLO(model_path)
+        imgsz = int(params.get("imgsz") or 1024)
+        tp = fp = tn = fn = 0
+        for i, im in enumerate(imgs):
+            if state.get("_cancel"):
+                raise RuntimeError("foydalanuvchi bekor qildi")
+            lbl = _yolo_label_path(im)
+            try:
+                gt_pos = lbl.exists() and any(
+                    ln.strip() for ln in lbl.read_text(encoding="utf-8", errors="replace").splitlines())
+            except Exception:
+                gt_pos = False
+            try:
+                r = model.predict(str(im), imgsz=imgsz, conf=conf, verbose=False)
+                pred_pos = bool(len(r[0].boxes))
+            except Exception:
+                # o'qib bo'lmaydigan rasm — tashlab ketamiz
+                state["skipped"] = state.get("skipped", 0) + 1
+                state["done"] = i + 1
+                continue
+            if gt_pos and pred_pos:
+                tp += 1
+            elif gt_pos:
+                fn += 1
+            elif pred_pos:
+                fp += 1
+            else:
+                tn += 1
+            state.update({"done": i + 1, "tp": tp, "fp": fp, "tn": tn, "fn": fn})
+
+        def sdiv(a: float, b: float):
+            return round(a / b, 4) if b else None
+
+        result = {
+            "run_id": run_id, "conf": conf, "imgsz": imgsz,
+            "images": len(imgs), "skipped": state.get("skipped", 0),
+            "tp": tp, "fp": fp, "tn": tn, "fn": fn,
+            "accuracy": sdiv(tp + tn, tp + tn + fp + fn),
+            "sensitivity": sdiv(tp, tp + fn),          # = Recall (rasm darajasida)
+            "specificity": sdiv(tn, tn + fp),
+            "precision": sdiv(tp, tp + fp),
+            "f1": sdiv(2 * tp, 2 * tp + fp + fn),
+            "finished_at": datetime.now(timezone.utc).isoformat(),
+        }
+        try:
+            proj.mkdir(parents=True, exist_ok=True)
+            (proj / "eval_image_level.json").write_text(
+                json.dumps(result, ensure_ascii=False, indent=1), encoding="utf-8")
+        except Exception:
+            pass
+        state["status"] = "done"
+        state["result"] = result
+    except Exception as e:  # noqa: BLE001
+        state["status"] = "failed"
+        state["error"] = f"{type(e).__name__}: {e}"
+    EVAL_JOBS[run_id] = state
+
+
+@app.post("/api/training/eval/{run_id}")
+def training_eval_start(run_id: str, conf: float = 0.25,
+                        _user: dict = Depends(auth_mod.require_user)):
+    """Val to'plamda rasm-darajali baholashni (fonda) boshlaydi."""
+    safe = re.sub(r"[^A-Za-z0-9_.-]", "", run_id)
+    if safe not in TRAINING_RUNS:
+        raise HTTPException(404, f"Run topilmadi: {safe}")
+    cur = EVAL_JOBS.get(safe)
+    if cur and cur.get("status") == "running":
+        raise HTTPException(409, "Baholash allaqachon ketmoqda")
+    conf = min(max(float(conf), 0.01), 0.95)
+    EVAL_JOBS[safe] = {
+        "status": "running", "conf": conf, "done": 0, "total": 0,
+        "started_at": datetime.now(timezone.utc).isoformat(),
+    }
+    threading.Thread(target=_run_image_eval, args=(safe, conf), daemon=True).start()
+    return {"run_id": safe, "status": "running"}
+
+
+@app.get("/api/training/eval/{run_id}")
+def training_eval_status(run_id: str, _user: dict = Depends(auth_mod.require_user)):
+    """Baholash holati; tugagan bo'lsa natija (diskdan ham o'qiydi)."""
+    safe = re.sub(r"[^A-Za-z0-9_.-]", "", run_id)
+    state = EVAL_JOBS.get(safe)
+    if state:
+        out = {k: v for k, v in state.items() if not k.startswith("_")}
+        return {"run_id": safe, **out}
+    f = BASE_DIR / "training_runs" / safe / "eval_image_level.json"
+    if f.exists():
+        try:
+            return {"run_id": safe, "status": "done", "result": json.loads(f.read_text(encoding="utf-8"))}
+        except Exception:
+            pass
+    return {"run_id": safe, "status": "none"}
+
+
+@app.get("/api/training/validate")
+def training_validate(
+    yaml_path: str = Query(..., alias="yaml"),
+    _user: dict = Depends(auth_mod.require_user),
+):
+    """data.yaml tekshiruvi: rasm soni, class taqsimoti, rasm↔label mosligi,
+    bo'sh/buzuq fayllar ogohlantirishi."""
+    yp = Path(yaml_path)
+    if not yp.exists():
+        raise HTTPException(404, f"data.yaml topilmadi: {yaml_path}")
+    import yaml as _yaml
+    try:
+        data = _yaml.safe_load(yp.read_text(encoding="utf-8")) or {}
+    except Exception as e:
+        raise HTTPException(400, f"data.yaml o'qib bo'lmadi: {e}")
+
+    ydir = yp.parent
+    base = data.get("path")
+    if base:
+        base = Path(base)
+        base = base if base.is_absolute() else (ydir / base)
+    else:
+        base = ydir
+
+    names_raw = data.get("names")
+    names: dict = {}
+    if isinstance(names_raw, dict):
+        names = {int(k): str(v) for k, v in names_raw.items()}
+    elif isinstance(names_raw, list):
+        names = {i: str(v) for i, v in enumerate(names_raw)}
+    nc = int(data.get("nc") or len(names) or 0)
+
+    IMG_EXT = {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff", ".webp"}
+
+    def split_info(split_key: str):
+        rel = data.get(split_key)
+        if not rel:
+            return None
+        if isinstance(rel, list):
+            rel = rel[0] if rel else None
+        if not rel:
+            return None
+        sp = Path(rel)
+        img_dir = sp if sp.is_absolute() else (base / sp)
+        info = {
+            "path": str(img_dir), "exists": img_dir.is_dir(),
+            "images": 0, "labels": 0, "missing_labels": 0,
+            "orphan_labels": 0, "empty_images": 0, "class_counts": {},
+        }
+        if not img_dir.is_dir():
+            return info
+        # YOLO konvensiyasi: images/ -> labels/
+        lbl_dir = Path(str(img_dir).replace("images", "labels", 1))
+        imgs = [p for p in img_dir.rglob("*") if p.suffix.lower() in IMG_EXT]
+        info["images"] = len(imgs)
+        img_stems = set()
+        for p in imgs:
+            img_stems.add(p.stem)
+            try:
+                if p.stat().st_size == 0:
+                    info["empty_images"] += 1
+            except Exception:
+                pass
+        lbl_files = list(lbl_dir.rglob("*.txt")) if lbl_dir.is_dir() else []
+        info["labels"] = len(lbl_files)
+        lbl_stems = set()
+        cc: dict = {}
+        for lf in lbl_files:
+            lbl_stems.add(lf.stem)
+            try:
+                for line in lf.read_text(encoding="utf-8").splitlines():
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        cid = int(float(line.split()[0]))
+                    except (ValueError, IndexError):
+                        continue
+                    cc[cid] = cc.get(cid, 0) + 1
+            except Exception:
+                continue
+        info["class_counts"] = {names.get(k, str(k)): v for k, v in sorted(cc.items())}
+        info["missing_labels"] = len(img_stems - lbl_stems)
+        info["orphan_labels"] = len(lbl_stems - img_stems)
+        return info
+
+    return {"yaml": str(yp), "names": names, "nc": nc,
+            "train": split_info("train"), "val": split_info("val")}
+
+
+@app.get("/api/system/gpu")
+def system_gpu(_user: dict = Depends(auth_mod.require_user)):
+    """nvidia-smi orqali GPU holati: VRAM band/jami, utilization, harorat.
+    Hamda torch CUDA'ni ko'ra oladimi — training GPU'da ketishini bildiradi.
+    Masofaviy GPU server yoqilgan bo'lsa — o'sha serverning GPU holatini qaytaradi."""
+    if remote_train.ENABLED:
+        out: dict = {"available": False, "gpus": [], "remote": True,
+                     "remote_url": remote_train.REMOTE_URL}
+        try:
+            h = remote_train.health()
+            out["torch_cuda"] = bool(h.get("cuda"))
+            out["torch_version"] = h.get("torch")
+            if h.get("cuda") and h.get("gpu"):
+                out["available"] = True
+                out["gpus"].append({"index": 0, "name": h["gpu"] + " (masofaviy)"})
+        except Exception as e:  # noqa: BLE001
+            out["error"] = f"Masofaviy GPU serverga ulanib bo'lmadi: {e}"
+            out["torch_cuda"] = False
+        return out
+    out: dict = {"available": False, "gpus": []}
+    try:
+        r = subprocess.run(
+            ["nvidia-smi",
+             "--query-gpu=index,name,memory.total,memory.used,memory.free,utilization.gpu,temperature.gpu",
+             "--format=csv,noheader,nounits"],
+            capture_output=True, text=True, timeout=5,
+        )
+        if r.returncode == 0:
+            for line in r.stdout.strip().splitlines():
+                parts = [p.strip() for p in line.split(",")]
+                if len(parts) >= 7:
+                    out["gpus"].append({
+                        "index": int(parts[0]), "name": parts[1],
+                        "mem_total_mb": float(parts[2]), "mem_used_mb": float(parts[3]),
+                        "mem_free_mb": float(parts[4]), "util_pct": float(parts[5]),
+                        "temp_c": float(parts[6]),
+                    })
+            out["available"] = bool(out["gpus"])
+    except Exception as e:
+        out["error"] = str(e)
+    try:
+        import torch
+        out["torch_cuda"] = bool(torch.cuda.is_available())
+        out["torch_version"] = torch.__version__
+    except Exception:
+        out["torch_cuda"] = False
+    return out
+
+
+# --------------------------------------------------------------------------- #
+# Hisobot generatori — strukturaviy topilmalar -> mammografiya hisoboti        #
+# --------------------------------------------------------------------------- #
+class ReportDetection(BaseModel):
+    laterality: str = ""
+    view: str = ""
+    quadrant: str = ""
+    cx: Optional[float] = None
+    cy: Optional[float] = None
+    type: str = "mass"
+    size_mm: Optional[float] = None
+    margin: str = ""
+    birads: str = "0"
+    confidence: Optional[float] = None
+
+
+class ReportGenerateBody(BaseModel):
+    detections: list[ReportDetection] = []
+    findings: Optional[dict] = None
+    dicom_meta: dict = {}
+    study_views: list[str] = []
+    mode: str = "auto"        # auto | template | llm
+    lang: str = "uz"
+    examples: list[str] = []
+
+
+@app.post("/api/report/generate")
+def report_generate(body: ReportGenerateBody, _user: dict = Depends(auth_mod.require_user)):
+    """Strukturaviy topilmalardan mammografiya hisoboti qoralamasini yaratadi.
+    mode=auto: Claude (ANTHROPIC_API_KEY bo'lsa) yoki shablonga fallback."""
+    from . import report_findings as rf
+    from . import report_gen as rg
+    findings = body.findings or rf.build_findings(
+        [d.model_dump() for d in body.detections],
+        dicom_meta=body.dicom_meta,
+        study_views=body.study_views,
+    )
+    out = rg.generate_report(
+        findings, mode=body.mode, examples=(body.examples or None), lang=body.lang
+    )
+    return {"findings": findings, **out}
+
+
+@app.get("/api/report/status")
+def report_status(_user: dict = Depends(auth_mod.require_user)):
+    """Qaysi hisobot backendlari mavjud: shablon (doim), lokal Ollama, bulutli Claude."""
+    from . import report_gen as rg
+    models = rg._ollama_available()
+    return {
+        "template": True,
+        "ollama": models is not None,
+        "ollama_models": models or [],
+        "ollama_default": rg.OLLAMA_MODEL,
+        "anthropic_key": bool(os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_AUTH_TOKEN")),
+    }
+
+
+class ReportExportBody(BaseModel):
+    source: str
+    ref: str
+    report: str
+    findings: Optional[dict] = None
+    verified: bool = False
+
+
+@app.post("/api/report/export-sr")
+def report_export_sr(body: ReportExportBody, user: dict = Depends(auth_mod.require_user)):
+    """Tasdiqlangan hisobotni DICOM Comprehensive SR sifatida eksport qiladi
+    (bemor/study metadata manba DICOM'dan meros olinadi)."""
+    _validate_source(body.source)
+    _validate_ref(body.source, body.ref)
+    src_path = _resolve_dicom_path(body.source, body.ref)
+    if not (body.report or "").strip():
+        raise HTTPException(400, "Hisobot matni bo'sh")
+    try:
+        data = dsr.report_to_sr(
+            src_path, body.report,
+            findings=body.findings,
+            author=user.get("sub"),
+            verified=body.verified,
+        )
+    except Exception as e:
+        raise HTTPException(500, f"SR build failed: {e}")
+    base = Path(body.ref).stem or "report"
+    fname = f"{base}_report_sr.dcm"
+    return StreamingResponse(
+        io.BytesIO(data),
+        media_type="application/dicom",
+        headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+    )
+
+
+# --------------------------------------------------------------------------- #
+# Model management dashboard — statistika, delete, versionlar                  #
+# --------------------------------------------------------------------------- #
+@app.get("/api/models/stats")
+def models_stats(_user: dict = Depends(auth_mod.require_user)):
+    """Har model uchun: hajm, qachon qo'shilgan, nechta annotation chiqargan."""
+    from datetime import datetime as _dt
+    models = inf.list_models()
+    # Annotation fayllaridan har model ishlatilgan sonni hisoblaymiz
+    usage: dict = {}
+    for ann_path in ANNOT_DIR.glob("*.json"):
+        try:
+            data = json.loads(ann_path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        for a in data.get("annotations") or []:
+            cb = str(a.get("created_by", ""))
+            if cb.startswith("ai:"):
+                model_name = cb[3:]
+                usage[model_name] = usage.get(model_name, 0) + 1
+    out = []
+    for m in models:
+        p = inf.MODELS_DIR / m["name"]
+        try:
+            mtime = p.stat().st_mtime
+            added = _dt.fromtimestamp(mtime, tz=timezone.utc).isoformat()
+        except Exception:
+            added = None
+        is_trained = m["name"].startswith("trained_")
+        out.append({
+            "name": m["name"],
+            "size_bytes": m["size_bytes"],
+            "size_mb": round(m["size_bytes"] / 1e6, 1),
+            "added_at": added,
+            "annotations_produced": usage.get(m["name"], 0),
+            "is_trained_locally": is_trained,
+            "is_deletable": is_trained,  # faqat lokal o'qitilganlar o'chiriladi
+        })
+    out.sort(key=lambda x: (-x["annotations_produced"], x["name"]))
+    return {"models": out, "models_dir": str(inf.MODELS_DIR)}
+
+
+@app.delete("/api/models/{name}")
+def delete_model(name: str, _user: dict = Depends(auth_mod.require_user)):
+    """Lokal o'qitilgan modelni o'chirish. Built-in (digitaleye/yolov8 va h.k.) o'chmaydi."""
+    safe = Path(name).name
+    if not safe.endswith(".pt"):
+        safe += ".pt"
+    if not safe.startswith("trained_"):
+        raise HTTPException(403, "Faqat lokal o'qitilgan (trained_*) modellarni o'chirish mumkin")
+    p = inf.MODELS_DIR / safe
+    if not p.exists():
+        raise HTTPException(404, f"Model topilmadi: {safe}")
+    try:
+        blob = _trash_file(p)  # unlink emas — savatchaga ko'chiramiz
+        audit_mod.trash_put(
+            "model", safe,
+            {"kind": "file", "orig_path": str(p)},
+            label=f"Model: {safe}", blob_path=blob,
+            deleted_by=_user.get("sub"),
+        )
+    except Exception as e:
+        raise HTTPException(500, f"O'chirib bo'lmadi: {e}")
+    # Inference cache'ni tozalash
+    try:
+        if str(p) in inf._model_cache:
+            with inf._cache_lock:
+                inf._model_cache.pop(str(p), None)
+    except Exception:
+        pass
+    return {"deleted": safe}
+
+
+# --------------------------------------------------------------------------- #
+# Active learning eslatmasi — qancha "modifikatsiyalangan AI annotation" bor   #
+# --------------------------------------------------------------------------- #
+ACTIVE_LEARNING_THRESHOLD = int(os.environ.get("ACTIVE_LEARNING_THRESHOLD", "50") or "50")
+
+
+@app.get("/api/training/suggestion")
+def training_suggestion(_user: dict = Depends(auth_mod.require_user)):
+    """AI'dan farqli yoki tasdiqlangan annotation'lar sonini sanab, retrain
+    kerakligi to'g'risida tavsiya beradi."""
+    edited = 0
+    approved = 0
+    human = 0
+    total = 0
+    for ann_path in ANNOT_DIR.glob("*.json"):
+        try:
+            data = json.loads(ann_path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        for a in data.get("annotations") or []:
+            total += 1
+            st = str(a.get("status", ""))
+            cb = str(a.get("created_by", ""))
+            if cb.startswith("ai:"):
+                if st in ("edited", "ai_review", "ai_accepted"):
+                    edited += 1
+                elif st in ("approved", "submitted"):
+                    approved += 1
+            else:
+                human += 1
+    eligible = human + edited + approved
+    should = eligible >= ACTIVE_LEARNING_THRESHOLD
+    return {
+        "total_annotations": total,
+        "human_annotations": human,
+        "edited_ai": edited,
+        "approved_ai": approved,
+        "eligible_for_training": eligible,
+        "threshold": ACTIVE_LEARNING_THRESHOLD,
+        "should_retrain": should,
+        "message": (
+            f"✓ Yangi modelni o'qitishga vaqt keldi ({eligible} ta yangi annotation)"
+            if should else
+            f"Yana {ACTIVE_LEARNING_THRESHOLD - eligible} ta annotation kerak"
+        ),
+    }
+
+
+class TrainingPrepareBody(BaseModel):
+    destination: str
+    target_size: int = 1024
+    val_frac: float = 0.15
+    include_ai: bool = False                # AI tomonidan yaratilgan annotation ham qo'shiladimi
+    statuses: Optional[list[str]] = None    # filtr (None = barchasi)
+    class_list: Optional[list[str]] = None  # None = annotation label'laridan avto
+    image_format: str = "png"               # "png" | "jpg"
+    seed: int = 42
+    zip_after: bool = False                 # ZIP qilib ko'chirish uchun tayyorlash
+
+
+def _polygon_to_bbox_pts(points: list[list[float]]) -> tuple[float, float, float, float]:
+    xs = [p[0] for p in points]
+    ys = [p[1] for p in points]
+    x0, x1 = max(0.0, min(xs)), min(1.0, max(xs))
+    y0, y1 = max(0.0, min(ys)), min(1.0, max(ys))
+    return x0, y0, max(0.0, x1 - x0), max(0.0, y1 - y0)
+
+
+@app.post("/api/training/prepare")
+def training_prepare(
+    body: TrainingPrepareBody,
+    _user: dict = Depends(auth_mod.require_role("admin", "reviewer")),
+):
+    """Annotation'lardan YOLO (Ultralytics) dataset yaratadi:
+        <dest>/
+            images/{train,val}/<id>.png
+            labels/{train,val}/<id>.txt
+            data.yaml
+    """
+    import random
+    import shutil
+    import zipfile
+
+    dest_str = (body.destination or "").strip()
+    if not dest_str:
+        raise HTTPException(400, "destination kerak")
+    dest = Path(dest_str)
+    # Masofaviy GPU rejimida "destination" — GPU serverdagi dataset NOMI.
+    # Lokal'da uni vaqtinchalik staging papkaga yig'amiz (training_data/<nom>),
+    # so'ng GPU'ga yuklaymiz. Nisbiy yo'l bo'lsa ham staging'ga ildizlaymiz.
+    if remote_train.ENABLED and not dest.is_absolute():
+        staging_root = BASE_DIR / "training_data"
+        staging_root.mkdir(parents=True, exist_ok=True)
+        safe_name = re.sub(r"[^A-Za-z0-9_.-]+", "_", dest.name).strip("._-") or "dataset"
+        dest = staging_root / safe_name
+    # training_data staging'iga ruxsat, boshqa app-ichi/sistem papkalari taqiqlangan
+    dest = _validate_export_dest(str(dest), allow_subtrees=(BASE_DIR / "training_data",))
+    try:
+        dest.mkdir(parents=True, exist_ok=True)
+    except Exception as e:
+        raise HTTPException(400, f"Papka yaratib bo'lmadi: {e}")
+
+    target_size = max(256, min(4096, int(body.target_size)))
+    val_frac = max(0.0, min(0.5, float(body.val_frac)))
+    img_ext = "jpg" if body.image_format.lower() in ("jpg", "jpeg") else "png"
+
+    # 1-bosqich: annotation fayllarni o'qib, tasniflash
+    #   upload__<id>.json   -> UPLOAD_DIR/<id>.dcm
+    #   local__<hash>.json  -> annotatsiya ichidagi "ref" (LOCAL_DICOM_ROOT ostidagi nisbiy yo'l)
+    items: list[dict] = []
+    label_set: set[str] = set()
+
+    def _read_ann(ann_path: Path, prefix: str) -> None:
+        file_id = ann_path.stem.replace(f"{prefix}__", "", 1)
+        try:
+            data = json.loads(ann_path.read_text(encoding="utf-8"))
+        except Exception:
+            return
+        # DICOM yo'lini topish
+        if prefix == "upload":
+            dcm = UPLOAD_DIR / f"{file_id}.dcm"
+            if not dcm.exists():
+                return
+        else:  # local — yo'l annotatsiya ichidagi "ref" da saqlangan
+            ref = str(data.get("ref") or "").strip()
+            if not ref:
+                return
+            try:
+                dcm = _resolve_local(ref)
+            except Exception:
+                return
+            if not dcm.exists():
+                return
+        anns = data.get("annotations") or []
+        # Filtrlar
+        kept = []
+        for a in anns:
+            cb = str(a.get("created_by", ""))
+            if not body.include_ai and cb.startswith("ai:"):
+                continue
+            if body.statuses and a.get("status") not in body.statuses:
+                continue
+            t = a.get("type")
+            if t == "bbox" and a.get("bbox"):
+                bx, by, bw, bh = a["bbox"][:4]
+                kept.append({"label": str(a.get("label", "") or "lesion"), "bbox": [bx, by, bw, bh]})
+                label_set.add(kept[-1]["label"])
+            elif t == "polygon" and a.get("points") and len(a["points"]) >= 3:
+                bx, by, bw, bh = _polygon_to_bbox_pts(a["points"])
+                kept.append({"label": str(a.get("label", "") or "lesion"), "bbox": [bx, by, bw, bh]})
+                label_set.add(kept[-1]["label"])
+        if not kept:
+            return
+        # Study guruhi uchun PatientID + StudyUID o'qiymiz (patient-aware split uchun)
+        try:
+            ds = pydicom.dcmread(str(dcm), stop_before_pixels=True, force=True)
+            pid = str(getattr(ds, "PatientID", "") or "")
+            suid = str(getattr(ds, "StudyInstanceUID", "") or "")
+        except Exception:
+            pid = suid = ""
+        group_key = pid or suid or file_id
+        items.append({"file_id": file_id, "dcm": dcm, "annotations": kept, "group": group_key})
+
+    for ann_path in sorted(ANNOT_DIR.glob("upload__*.json")):
+        _read_ann(ann_path, "upload")
+    for ann_path in sorted(ANNOT_DIR.glob("local__*.json")):
+        _read_ann(ann_path, "local")
+
+    if not items:
+        raise HTTPException(400, "Annotation bo'lgan fayl topilmadi (yoki filtr juda tor)")
+
+    # 2-bosqich: classlar tartibi
+    if body.class_list:
+        classes = list(dict.fromkeys(body.class_list))
+    else:
+        classes = sorted(label_set)
+    cls_to_id = {name: i for i, name in enumerate(classes)}
+
+    # 3-bosqich: patient-level train/val split
+    rng = random.Random(body.seed)
+    groups = sorted({it["group"] for it in items})
+    rng.shuffle(groups)
+    n_val_groups = max(1, int(round(len(groups) * val_frac))) if val_frac > 0 else 0
+    val_groups = set(groups[:n_val_groups])
+
+    # 4-bosqich: papka tuzilmasi
+    for sub in ("images/train", "images/val", "labels/train", "labels/val"):
+        (dest / sub).mkdir(parents=True, exist_ok=True)
+
+    counts = {"train_imgs": 0, "val_imgs": 0, "train_lbls": 0, "val_lbls": 0, "skipped": 0}
+
+    # 5-bosqich: har bir item ni qayta ishlash
+    for it in items:
+        split = "val" if it["group"] in val_groups else "train"
+        try:
+            png_bytes = render_frame_png(it["dcm"], frame=0, max_dim=target_size)
+        except Exception:
+            counts["skipped"] += 1
+            continue
+        # Agar JPG kerak bo'lsa, qayta kodlaymiz
+        img_bytes = png_bytes
+        if img_ext == "jpg":
+            try:
+                from PIL import Image
+                im = Image.open(io.BytesIO(png_bytes))
+                if im.mode != "RGB":
+                    im = im.convert("RGB")
+                buf = io.BytesIO()
+                im.save(buf, format="JPEG", quality=92)
+                img_bytes = buf.getvalue()
+            except Exception:
+                img_ext = "png"  # fallback
+
+        img_path = dest / f"images/{split}/{it['file_id']}.{img_ext}"
+        lbl_path = dest / f"labels/{split}/{it['file_id']}.txt"
+        img_path.write_bytes(img_bytes)
+        if split == "train":
+            counts["train_imgs"] += 1
+        else:
+            counts["val_imgs"] += 1
+
+        # YOLO label faylini yozish: <cls> <cx> <cy> <w> <h> (normallashtirilgan)
+        n_lines = 0
+        with lbl_path.open("w", encoding="utf-8") as f:
+            for a in it["annotations"]:
+                lbl_name = a["label"]
+                cls_id = cls_to_id.get(lbl_name)
+                if cls_id is None:
+                    continue
+                bx, by, bw, bh = a["bbox"]
+                cx = bx + bw / 2.0
+                cy = by + bh / 2.0
+                cx = max(0.0, min(1.0, cx)); cy = max(0.0, min(1.0, cy))
+                bw = max(0.0, min(1.0, bw)); bh = max(0.0, min(1.0, bh))
+                if bw <= 0 or bh <= 0:
+                    continue
+                f.write(f"{cls_id} {cx:.6f} {cy:.6f} {bw:.6f} {bh:.6f}\n")
+                n_lines += 1
+        if split == "train":
+            counts["train_lbls"] += n_lines
+        else:
+            counts["val_lbls"] += n_lines
+
+    # 6-bosqich: data.yaml
+    yaml_path = dest / "data.yaml"
+    yaml_lines = [
+        f"# MAMOGRAF training dataset — {datetime.now(timezone.utc).isoformat()}",
+        f"path: {dest.as_posix()}",
+        "train: images/train",
+        "val: images/val",
+        f"nc: {len(classes)}",
+        "names:",
+    ]
+    for i, n in enumerate(classes):
+        yaml_lines.append(f"  {i}: {n}")
+    yaml_path.write_text("\n".join(yaml_lines) + "\n", encoding="utf-8")
+
+    # Train buyrug'i ko'rsatmasi
+    readme = dest / "README_TRAIN.md"
+    readme.write_text(
+        "# YOLO training dataset (MAMOGRAF)\n\n"
+        f"Yaratilgan: {datetime.now(timezone.utc).isoformat()}\n"
+        f"Klasslar ({len(classes)}): {classes}\n\n"
+        "## Ultralytics bilan train:\n\n"
+        "```bash\n"
+        "pip install ultralytics\n"
+        "yolo task=detect mode=train model=yolo11n.pt "
+        f"data={(yaml_path).as_posix()} epochs=100 imgsz={target_size} batch=8\n"
+        "```\n\n"
+        "## Yoki Python:\n\n"
+        "```python\n"
+        "from ultralytics import YOLO\n"
+        "m = YOLO('yolo11n.pt')\n"
+        f"m.train(data=r'{yaml_path}', epochs=100, imgsz={target_size}, batch=8)\n"
+        "```\n",
+        encoding="utf-8",
+    )
+
+    zip_path = None
+    if body.zip_after:
+        zip_path = dest.parent / (dest.name + ".zip")
+        with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+            for p in dest.rglob("*"):
+                if p.is_file():
+                    zf.write(p, p.relative_to(dest.parent))
+
+    # --- Masofaviy GPU serverga oldindan yuklash --------------------------- #
+    # Shunda ▶ Train bosilganda dataset qayta yuborilmaydi — darhol boshlanadi.
+    remote_dataset = None
+    dataset_name = None
+    if remote_train.ENABLED:
+        dataset_name = re.sub(r"[^A-Za-z0-9_.-]+", "_", dest.name).strip("._-") or "dataset"
+        try:
+            remote_dataset = remote_train.push_dataset(dataset_name, dest)
+        except Exception as e:  # noqa: BLE001
+            remote_dataset = {"error": str(e)}
+
+    return {
+        "destination": str(dest),
+        "data_yaml": str(yaml_path),
+        "readme": str(readme),
+        "zip": str(zip_path) if zip_path else None,
+        "classes": classes,
+        "items_total": len(items),
+        "val_groups": n_val_groups,
+        "total_groups": len(groups),
+        "dataset_name": dataset_name,        # GPU serverdagi dataset nomi (remote rejim)
+        "remote_dataset": remote_dataset,    # GPU yuklash natijasi yoki {error:...}
+        **counts,
+    }
+
+
+# (C1) 4-view side-by-side: shu fayl bilan bir Study'dagi barcha proyeksiyalar
+@app.get("/api/files/{file_id}/study_views")
+def study_views(file_id: str):
+    p = UPLOAD_DIR / f"{file_id}.dcm"
+    if not p.exists():
+        raise HTTPException(404)
+    try:
+        ds = pydicom.dcmread(str(p), stop_before_pixels=True, force=True)
+    except Exception as e:
+        raise HTTPException(500, f"read failed: {e}")
+    study_uid = str(getattr(ds, "StudyInstanceUID", "") or "")
+    if not study_uid:
+        return {"views": [], "study_uid": ""}
+    out = []
+    for f in UPLOAD_DIR.glob("*.dcm"):
+        try:
+            ds2 = pydicom.dcmread(str(f), stop_before_pixels=True, force=True)
+        except Exception:
+            continue
+        if str(getattr(ds2, "StudyInstanceUID", "") or "") != study_uid:
+            continue
+        view = str(getattr(ds2, "ViewPosition", "") or "").upper()
+        lat = str(getattr(ds2, "ImageLaterality", "") or "").upper()
+        out.append({
+            "id": f.stem,
+            "view": view,
+            "laterality": lat,
+            "key": f"{lat}{view}",   # mas. LCC, RCC, LMLO, RMLO
+            "kind": "upload",
+        })
+    # Standart mammografiya tartibi
+    ORDER = ["LCC", "RCC", "LMLO", "RMLO"]
+    def sort_key(v):
+        try:
+            return (ORDER.index(v["key"]), v["id"])
+        except ValueError:
+            return (99, v["id"])
+    out.sort(key=sort_key)
+    return {"views": out, "study_uid": study_uid}
 
 
 @app.get("/api/files/{file_id}/image")
@@ -500,11 +2499,40 @@ def image(
     return StreamingResponse(io.BytesIO(png_bytes), media_type="image/png")
 
 
+@app.get("/api/files/{file_id}/auto_window")
+def auto_window_ep(file_id: str, frame: int = 0):
+    """Histogramma asosida avtomatik WC/WW (oyna taglari yo'q rasmlar uchun ham)."""
+    p = UPLOAD_DIR / f"{file_id}.dcm"
+    if not p.exists():
+        raise HTTPException(404)
+    try:
+        wc, ww = auto_window(p, frame=frame)
+    except NoPixelDataError:
+        raise HTTPException(422, "no pixels")
+    except Exception as e:
+        raise HTTPException(500, f"auto_window failed: {e}")
+    return {"wc": wc, "ww": ww}
+
+
 @app.delete("/api/files/{file_id}")
 def delete_file(file_id: str, _user: dict = Depends(auth_mod.require_user)):
     p = UPLOAD_DIR / f"{file_id}.dcm"
     if p.exists():
-        p.unlink()
+        # Asl nomni (DICOM ichidan) belgi sifatida olishga harakat
+        label = f"Yuklangan fayl: {file_id}"
+        try:
+            ds = pydicom.dcmread(p, stop_before_pixels=True, force=True)
+            nm = str(getattr(ds, "PatientName", "") or "")
+            if nm:
+                label = f"Fayl ({nm}): {file_id}"
+        except Exception:
+            pass
+        blob = _trash_file(p)  # unlink emas — savatchaga
+        audit_mod.trash_put(
+            "file", file_id,
+            {"kind": "file", "orig_path": str(p)},
+            label=label, blob_path=blob, deleted_by=_user.get("sub"),
+        )
     return {"ok": True}
 
 
@@ -526,10 +2554,28 @@ def local_list(subdir: str = "", limit: int = 1000):
     except PermissionError:
         raise HTTPException(403, "permission denied")
 
+    # Har bir bevosita ichki papka uchun ichidagi (rekursiv) annotatsiyalar yig'indisi.
+    prefix = (subdir.rstrip("/") + "/") if subdir else ""
+    dir_counts: dict[str, int] = {}
+    for entry in annot_store.iter_all(ANNOT_DIR):
+        if entry.get("source") != "local":
+            continue
+        ref = entry.get("ref") or ""
+        if prefix and not ref.startswith(prefix):
+            continue
+        rest = ref[len(prefix):]
+        if "/" not in rest:
+            continue  # joriy papkadagi to'g'ridan-to'g'ri fayl (papka ichida emas)
+        n = len(entry.get("annotations") or [])
+        if n:
+            seg = rest.split("/", 1)[0]
+            dir_counts[seg] = dir_counts.get(seg, 0) + n
+
     for p in entries[:limit]:
         rel = p.relative_to(LOCAL_ROOT).as_posix()
         if p.is_dir():
-            dirs.append({"name": p.name, "path": rel})
+            dirs.append({"name": p.name, "path": rel,
+                         "annotation_count": dir_counts.get(p.name, 0)})
         elif _looks_like_dicom(p):
             try:
                 size = p.stat().st_size
@@ -1028,9 +3074,11 @@ def list_annotations(
                 "annotation_id": a.get("id"),
                 "type": a.get("type", "bbox"),
                 "label": a.get("label"),
+                "labels": a.get("labels") or ([a["label"]] if a.get("label") else []),
                 "bi_rads": a.get("bi_rads"),
                 "status": ann_status,
                 "created_by": a.get("created_by"),
+                "ai_source": a.get("ai_source"),
                 "updated_by": a.get("updated_by"),
                 "reviewed_by": a.get("reviewed_by"),
                 "review_note": a.get("review_note"),
@@ -1181,13 +3229,10 @@ def _build_coco():
         img_id = image_ix[key]
         link_for_image = links.get(key)
         for a in entry.get("annotations", []):
-            label = a.get("label") or "other"
-            if label not in label_ix:
-                label_ix[label] = len(label_ix) + 1
-            cat_id = label_ix[label]
             bbox = a.get("bbox") or [0, 0, 0, 0]
             if len(bbox) != 4:
                 continue
+            labs = exporters.ann_labels(a) or ["other"]
             x_n, y_n, w_n, h_n = bbox
             if rows and cols:
                 x = x_n * cols
@@ -1198,24 +3243,8 @@ def _build_coco():
                 x, y, w, h = x_n, y_n, w_n, h_n
 
             ann_type = a.get("type") or "bbox"
-            ann_out = {
-                "id": next_ann_id,
-                "image_id": img_id,
-                "category_id": cat_id,
-                "type": ann_type,
-                "bbox": [round(x, 2), round(y, 2), round(w, 2), round(h, 2)],
-                "bbox_normalized": [x_n, y_n, w_n, h_n],
-                "iscrowd": 0,
-                "bi_rads": a.get("bi_rads") or "",
-                "note": a.get("note") or "",
-                "frame": a.get("frame") or 0,
-                "status": a.get("status") or "draft",
-                "created_by": a.get("created_by") or "",
-                "reviewed_by": a.get("reviewed_by") or "",
-            }
-            if link_for_image and link_for_image.get("patient_id"):
-                ann_out["patient_id"] = link_for_image["patient_id"]
-
+            # Geometry/segmentation is computed once and shared across labels.
+            seg_fields: dict = {}
             if ann_type == "polygon" and a.get("points"):
                 pts = a["points"]
                 if rows and cols:
@@ -1223,22 +3252,48 @@ def _build_coco():
                     for px, py in pts:
                         flat_px.append(round(px * cols, 2))
                         flat_px.append(round(py * rows, 2))
-                    ann_out["segmentation"] = [flat_px]
+                    seg_fields["segmentation"] = [flat_px]
                     pts_px = [(px * cols, py * rows) for px, py in pts]
-                    ann_out["area"] = round(abs(_polygon_area(pts_px)), 2)
+                    seg_fields["area"] = round(abs(_polygon_area(pts_px)), 2)
                 else:
                     flat_n: list[float] = []
                     for px, py in pts:
                         flat_n.append(px)
                         flat_n.append(py)
-                    ann_out["segmentation_normalized"] = [flat_n]
-                    ann_out["area"] = round(w * h, 2)
-                ann_out["points_count"] = len(pts)
+                    seg_fields["segmentation_normalized"] = [flat_n]
+                    seg_fields["area"] = round(w * h, 2)
+                seg_fields["points_count"] = len(pts)
             else:
-                ann_out["area"] = round(w * h, 2)
+                seg_fields["area"] = round(w * h, 2)
 
-            annotations_out.append(ann_out)
-            next_ann_id += 1
+            # Multi-label: emit one COCO annotation per label, sharing group_id.
+            group_id = a.get("id") or f"g{next_ann_id}"
+            for lab in labs:
+                if lab not in label_ix:
+                    label_ix[lab] = len(label_ix) + 1
+                ann_out = {
+                    "id": next_ann_id,
+                    "image_id": img_id,
+                    "category_id": label_ix[lab],
+                    "group_id": group_id,
+                    "label": lab,
+                    "labels": labs,
+                    "type": ann_type,
+                    "bbox": [round(x, 2), round(y, 2), round(w, 2), round(h, 2)],
+                    "bbox_normalized": [x_n, y_n, w_n, h_n],
+                    "iscrowd": 0,
+                    "bi_rads": a.get("bi_rads") or "",
+                    "note": a.get("note") or "",
+                    "frame": a.get("frame") or 0,
+                    "status": a.get("status") or "draft",
+                    "created_by": a.get("created_by") or "",
+                    "reviewed_by": a.get("reviewed_by") or "",
+                }
+                ann_out.update(seg_fields)
+                if link_for_image and link_for_image.get("patient_id"):
+                    ann_out["patient_id"] = link_for_image["patient_id"]
+                annotations_out.append(ann_out)
+                next_ann_id += 1
 
     categories = [{"id": v, "name": k} for k, v in sorted(label_ix.items(), key=lambda kv: kv[1])]
     return {
@@ -1389,10 +3444,13 @@ def pacs_add_server(
 @app.delete("/api/pacs/servers/{srv_id}")
 def pacs_delete_server(srv_id: int, _admin: dict = Depends(auth_mod.require_role("admin"))):
     with db_mod.get_conn() as c:
-        cur = c.execute("DELETE FROM pacs_servers WHERE id=?", (srv_id,))
-        c.commit()
-        if cur.rowcount == 0:
+        row = c.execute("SELECT * FROM pacs_servers WHERE id=?", (srv_id,)).fetchone()
+        if not row:
             raise HTTPException(404, "not found")
+        audit_mod.trash_db_row("pacs_servers", dict(row), "pacs_server", srv_id,
+                               label=f"PACS: {row['name']}", deleted_by=_admin.get("sub"))
+        c.execute("DELETE FROM pacs_servers WHERE id=?", (srv_id,))
+        c.commit()
     return {"ok": True}
 
 
@@ -1573,10 +3631,14 @@ def pacs_to_worklist(
 @app.delete("/api/worklist/{wl_id}")
 def delete_worklist(wl_id: int, _admin: dict = Depends(auth_mod.require_role("admin"))):
     with db_mod.get_conn() as c:
-        cur = c.execute("DELETE FROM worklist WHERE id = ?", (wl_id,))
-        c.commit()
-        if cur.rowcount == 0:
+        row = c.execute("SELECT * FROM worklist WHERE id = ?", (wl_id,)).fetchone()
+        if not row:
             raise HTTPException(404, "not found")
+        audit_mod.trash_db_row("worklist", dict(row), "worklist", wl_id,
+                               label=f"Worklist: {row['patient_name'] or row['patient_id']}",
+                               deleted_by=_admin.get("sub"))
+        c.execute("DELETE FROM worklist WHERE id = ?", (wl_id,))
+        c.commit()
     return {"ok": True}
 
 
@@ -1680,6 +3742,282 @@ def deid_download(source: str, ref: str, _user: dict = Depends(auth_mod.require_
         media_type="application/dicom",
         headers={"Content-Disposition": f'attachment; filename="{fname}"'},
     )
+
+
+@app.get("/api/export/mask")
+def export_mask(
+    source: str,
+    ref: str,
+    format: str = "png",
+    _user: dict = Depends(auth_mod.require_user),
+):
+    """Segmentation mask for one image, built from its polygons + bboxes.
+
+    format=png   → label-indexed PNG (0 = background, 1..N = label classes)
+    format=nifti → label-indexed .nii.gz (same indexing)
+
+    The class→label legend is returned in the ``X-Mask-Legend`` header (JSON).
+    """
+    fmt = format.lower()
+    if fmt not in ("png", "nifti"):
+        raise HTTPException(400, "format must be 'png' or 'nifti'")
+    _validate_source(source)
+    _validate_ref(source, ref)
+    data = annot_store.load(ANNOT_DIR, source, ref)
+    annotations = data.get("annotations", []) or []
+    if not annotations:
+        raise HTTPException(404, "no annotations to export")
+    rows, cols = _resolve_dims(source, ref, data.get("rows"), data.get("cols"))
+    if not rows or not cols:
+        raise HTTPException(422, "image dimensions unknown; cannot rasterize mask")
+
+    label_names = [l["name"] for l in load_labels_config()[0]]
+    label_index = {name: i + 1 for i, name in enumerate(label_names)}
+    # Include any ad-hoc labels not in config so nothing is silently dropped.
+    for a in annotations:
+        for lab in exporters.ann_labels(a):
+            if lab not in label_index:
+                label_index[lab] = len(label_index) + 1
+
+    try:
+        mask = exporters.build_label_mask(annotations, rows, cols, label_index)
+    except Exception as e:
+        raise HTTPException(500, f"mask build failed: {e}")
+
+    base = Path(ref).stem or "annotations"
+    legend = json.dumps(exporters.mask_legend(label_index), ensure_ascii=False)
+    if fmt == "png":
+        body = exporters.mask_to_png_bytes(mask)
+        media, suffix = "image/png", "mask.png"
+    else:
+        body = exporters.mask_to_nifti_bytes(mask)
+        media, suffix = "application/gzip", "mask.nii.gz"
+
+    return StreamingResponse(
+        io.BytesIO(body),
+        media_type=media,
+        headers={
+            "Content-Disposition": f'attachment; filename="{base}_{suffix}"',
+            "X-Mask-Legend": legend,
+        },
+    )
+
+
+def _radiomics_for(source: str, ref: str, bins: int, only_id: Optional[str] = None):
+    """Compute radiomics features for one or all annotations on an image.
+
+    Returns ``(image_meta, [ {annotation_id, label, labels, frame, features}, ... ])``.
+    """
+    path = _resolve_dicom_path(source, ref)
+    data = annot_store.load(ANNOT_DIR, source, ref)
+    annotations = data.get("annotations", []) or []
+    if only_id:
+        annotations = [a for a in annotations if a.get("id") == only_id]
+    if not annotations:
+        raise HTTPException(404, "no matching annotations")
+    rows, cols = _resolve_dims(source, ref, data.get("rows"), data.get("cols"))
+    if not rows or not cols:
+        raise HTTPException(422, "image dimensions unknown")
+
+    # Load each needed frame once (radiomics is per-frame).
+    frame_cache: dict[int, tuple] = {}
+    out: list[dict] = []
+    for a in annotations:
+        frame = int(a.get("frame") or 0)
+        if frame not in frame_cache:
+            try:
+                frame_cache[frame] = load_frame_array(path, frame=frame)
+            except Exception as e:
+                raise HTTPException(500, f"pixel load failed: {e}")
+        image, spacing = frame_cache[frame]
+        fr_rows, fr_cols = image.shape[:2]
+        mask = radiomics_mod.roi_mask_from_annotation(a, fr_rows, fr_cols)
+        if not mask.any():
+            continue
+        try:
+            feats = radiomics_mod.extract(image, mask, spacing=spacing, bins=bins)
+        except Exception as e:
+            raise HTTPException(500, f"radiomics failed for {a.get('id')}: {e}")
+        out.append({
+            "annotation_id": a.get("id"),
+            "label": a.get("label"),
+            "labels": exporters.ann_labels(a),
+            "bi_rads": a.get("bi_rads") or "",
+            "frame": frame,
+            "type": a.get("type") or "bbox",
+            "spacing_mm": list(spacing) if spacing else None,
+            "features": feats,
+        })
+    if not out:
+        raise HTTPException(422, "ROI(s) produced no usable mask")
+    return {"source": source, "ref": ref, "rows": rows, "cols": cols, "bins": bins}, out
+
+
+@app.get("/api/radiomics")
+def get_radiomics(
+    source: str,
+    ref: str,
+    annotation_id: Optional[str] = None,
+    bins: int = 32,
+    _user: dict = Depends(auth_mod.require_user),
+):
+    """Radiomics features for one annotation (annotation_id) or all on the image."""
+    _validate_source(source)
+    _validate_ref(source, ref)
+    bins = max(8, min(128, int(bins)))
+    meta, items = _radiomics_for(source, ref, bins, only_id=annotation_id)
+    return {**meta, "results": items}
+
+
+@app.get("/api/radiomics/csv")
+def get_radiomics_csv(
+    source: str,
+    ref: str,
+    bins: int = 32,
+    _user: dict = Depends(auth_mod.require_user),
+):
+    """All ROIs on an image as a CSV — one row per annotation, one column per feature."""
+    _validate_source(source)
+    _validate_ref(source, ref)
+    bins = max(8, min(128, int(bins)))
+    _meta, items = _radiomics_for(source, ref, bins)
+
+    # Stable, flattened column order: family.feature
+    cols_keys: list[str] = []
+    for fam, feats in items[0]["features"].items():
+        for fname in feats:
+            cols_keys.append(f"{fam}.{fname}")
+    header = ["annotation_id", "label", "labels", "bi_rads", "frame", "type"] + cols_keys
+
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(header)
+    for it in items:
+        flat = {f"{fam}.{fn}": v for fam, feats in it["features"].items() for fn, v in feats.items()}
+        row = [
+            it["annotation_id"], it["label"] or "", ";".join(it["labels"]),
+            it["bi_rads"], it["frame"], it["type"],
+        ] + [flat.get(k, "") for k in cols_keys]
+        writer.writerow(row)
+
+    body = ("﻿" + buf.getvalue()).encode("utf-8")
+    base = Path(ref).stem or "annotations"
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    return StreamingResponse(
+        io.BytesIO(body),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{base}_radiomics_{stamp}.csv"'},
+    )
+
+
+@app.get("/api/radiomics/classifier/status")
+def radiomics_clf_status(_user: dict = Depends(auth_mod.require_user)):
+    """Benign/malignant klassifikatorning holati (o'qitilganmi, metrikalari)."""
+    return radclf.model_info()
+
+
+@app.get("/api/radiomics/classify")
+def radiomics_classify(
+    source: str,
+    ref: str,
+    annotation_id: str,
+    bins: int = 32,
+    _user: dict = Depends(auth_mod.require_user),
+):
+    """Tanlangan annotatsiya (massa ROI) uchun benign/malignant bashorati.
+
+    QAROR QO'LLAB-QUVVATLASH — radiologning yakuniy tashxisini almashtirmaydi.
+    """
+    _validate_source(source)
+    _validate_ref(source, ref)
+    if not radclf.is_trained():
+        raise HTTPException(409, "klassifikator hali o'qitilmagan "
+                            "(scripts/train_radiomics_clf.py orqali o'qiting)")
+    bins = max(8, min(128, int(bins)))
+    _meta, items = _radiomics_for(source, ref, bins, only_id=annotation_id)
+    it = items[0]
+    try:
+        pred = radclf.predict_one(it["features"], it.get("bi_rads"))
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(500, f"klassifikatsiya xato: {e}")
+    return {
+        "annotation_id": it["annotation_id"],
+        "lesion_label": it.get("label"),
+        "bi_rads": it.get("bi_rads") or "",
+        **pred,
+    }
+
+
+@app.get("/api/stats/local_dicom")
+def stats_local_dicom(_user: dict = Depends(auth_mod.require_user)):
+    """LOCAL_DICOM_ROOT papkasidagi DICOM fayl va noyob bemorlar soni.
+    Natija 10 daqiqaga keshlanadi (skanerlash juda sekin)."""
+    import time
+    cached = _cache_get("local_dicom_stats")
+    if cached is not None:
+        return cached
+
+    if LOCAL_ROOT is None or not LOCAL_ROOT.is_dir():
+        out = {
+            "enabled": False,
+            "root": LOCAL_ROOT_ENV or "(o'rnatilmagan)",
+            "dicom_files": 0,
+            "unique_patients": 0,
+            "scan_duration_s": 0.0,
+            "message": "LOCAL_DICOM_ROOT env-var sozlanmagan yoki papka mavjud emas",
+        }
+        _cache_set("local_dicom_stats", out)
+        return out
+
+    t0 = time.time()
+    # 1. Fayllarni sanash (tez)
+    dcm_files = []
+    for ext in ("*.dcm", "*.cdcm", "*.DCM"):
+        dcm_files.extend(LOCAL_ROOT.rglob(ext))
+    n_files = len(dcm_files)
+
+    # 2. Bemorlar (PatientID) — har faylni o'qib, header'dan olamiz
+    # PatientID'lar to'plamida unique sanash. Katta fayllar — header o'qish tez,
+    # ammo 5000+ fayl bo'lsa 10-30 sek bo'lishi mumkin.
+    patient_ids: set[str] = set()
+    by_modality: dict[str, int] = {}
+    errors = 0
+    for f in dcm_files:
+        try:
+            ds = pydicom.dcmread(str(f), stop_before_pixels=True, force=True, specific_tags=["PatientID", "Modality"])
+            pid = str(getattr(ds, "PatientID", "") or "").strip()
+            if pid:
+                patient_ids.add(pid)
+            mod = str(getattr(ds, "Modality", "") or "").strip() or "UNKNOWN"
+            by_modality[mod] = by_modality.get(mod, 0) + 1
+        except Exception:
+            errors += 1
+    dt = time.time() - t0
+
+    # 3. Yuqori darajadagi papkalar (foydali ko'rsatkich)
+    top_dirs = []
+    try:
+        for d in sorted(LOCAL_ROOT.iterdir()):
+            if d.is_dir():
+                n = sum(1 for _ in d.rglob("*.dcm")) + sum(1 for _ in d.rglob("*.cdcm"))
+                top_dirs.append({"name": d.name, "dicom_count": n})
+        top_dirs.sort(key=lambda x: -x["dicom_count"])
+        top_dirs = top_dirs[:20]
+    except Exception:
+        top_dirs = []
+
+    out = {
+        "enabled": True,
+        "root": str(LOCAL_ROOT),
+        "dicom_files": n_files,
+        "unique_patients": len(patient_ids),
+        "by_modality": [{"modality": k, "count": v} for k, v in sorted(by_modality.items(), key=lambda x: -x[1])],
+        "top_subdirs": top_dirs,
+        "errors": errors,
+        "scan_duration_s": round(dt, 2),
+    }
+    _cache_set("local_dicom_stats", out)
+    return out
 
 
 @app.get("/api/stats/overview")
@@ -1854,18 +4192,167 @@ def export_history_csv(
     )
 
 
+def _export_images() -> list[dict]:
+    """Normalized per-image view used by YOLO/VOC/CSV/mask exporters."""
+    out: list[dict] = []
+    for entry in annot_store.iter_all(ANNOT_DIR):
+        source = entry.get("source")
+        ref = entry.get("ref")
+        if not source or not ref:
+            continue
+        rows, cols = _resolve_dims(source, ref, entry.get("rows"), entry.get("cols"))
+        out.append({
+            "source": source,
+            "ref": ref,
+            "rows": rows,
+            "cols": cols,
+            "annotations": entry.get("annotations", []) or [],
+        })
+    return out
+
+
+def _build_yolo_dataset_zip(imgsz: int = 1024, val_frac: float = 0.2, seed: int = 42) -> bytes:
+    """Annotatsiyalardan TO'LIQ, yuklab olinadigan YOLO dataset:
+        images/{train,val}/<id>.png + labels/{train,val}/<id>.txt + data.yaml
+    Rasmlar DICOM'dan render qilinadi, train/val bemor darajasida bo'linadi."""
+    import random
+    import zipfile
+
+    items: list[dict] = []
+    label_set: set[str] = set()
+    for ann_path in sorted(ANNOT_DIR.glob("upload__*.json")):
+        file_id = ann_path.stem.replace("upload__", "", 1)
+        dcm = UPLOAD_DIR / f"{file_id}.dcm"
+        if not dcm.exists():
+            continue
+        try:
+            data = json.loads(ann_path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        kept = []
+        for a in (data.get("annotations") or []):
+            t = a.get("type")
+            if t == "bbox" and a.get("bbox"):
+                bx, by, bw, bh = a["bbox"][:4]
+            elif t == "polygon" and a.get("points") and len(a["points"]) >= 3:
+                bx, by, bw, bh = _polygon_to_bbox_pts(a["points"])
+            else:
+                continue
+            lbl = str(a.get("label", "") or "lesion")
+            kept.append({"label": lbl, "bbox": [bx, by, bw, bh]})
+            label_set.add(lbl)
+        if not kept:
+            continue
+        try:
+            ds = pydicom.dcmread(str(dcm), stop_before_pixels=True, force=True)
+            pid = str(getattr(ds, "PatientID", "") or "")
+            suid = str(getattr(ds, "StudyInstanceUID", "") or "")
+        except Exception:
+            pid = suid = ""
+        items.append({"file_id": file_id, "dcm": dcm, "annotations": kept, "group": pid or suid or file_id})
+
+    if not items:
+        raise HTTPException(400, "Annotatsiya bo'lgan fayl topilmadi")
+
+    classes = sorted(label_set)
+    cls_to_id = {n: i for i, n in enumerate(classes)}
+    imgsz = max(256, min(4096, int(imgsz)))
+    val_frac = max(0.0, min(0.5, float(val_frac)))
+    rng = random.Random(seed)
+    groups = sorted({it["group"] for it in items})
+    rng.shuffle(groups)
+    if len(groups) <= 1 and len(items) > 1:
+        # Bitta bemor: rasm darajasida bo'linish (train bo'sh qolmasligi uchun)
+        order = list(range(len(items)))
+        rng.shuffle(order)
+        n_val_items = max(1, int(round(len(items) * val_frac))) if val_frac > 0 else 0
+        n_val_items = min(n_val_items, len(items) - 1)  # kamida 1 ta train
+        val_idx = set(order[:n_val_items])
+        for i, it in enumerate(items):
+            it["_split"] = "val" if i in val_idx else "train"
+    else:
+        n_val_groups = max(1, int(round(len(groups) * val_frac))) if val_frac > 0 else 0
+        if len(groups) > 1:
+            n_val_groups = min(n_val_groups, len(groups) - 1)  # train bo'sh qolmasin
+        val_groups = set(groups[:n_val_groups])
+        for it in items:
+            it["_split"] = "val" if it["group"] in val_groups else "train"
+
+    n_train = n_val = 0
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+        for it in items:
+            split = it["_split"]
+            try:
+                png = render_frame_png(it["dcm"], frame=0, max_dim=imgsz)
+            except Exception:
+                continue
+            z.writestr(f"images/{split}/{it['file_id']}.png", png)
+            lines = []
+            for a in it["annotations"]:
+                cid = cls_to_id.get(a["label"])
+                if cid is None:
+                    continue
+                bx, by, bw, bh = a["bbox"]
+                cx = max(0.0, min(1.0, bx + bw / 2.0))
+                cy = max(0.0, min(1.0, by + bh / 2.0))
+                bw = max(0.0, min(1.0, bw))
+                bh = max(0.0, min(1.0, bh))
+                if bw <= 0 or bh <= 0:
+                    continue
+                lines.append(f"{cid} {cx:.6f} {cy:.6f} {bw:.6f} {bh:.6f}")
+            z.writestr(f"labels/{split}/{it['file_id']}.txt", ("\n".join(lines) + "\n") if lines else "")
+            n_train, n_val = (n_train + 1, n_val) if split == "train" else (n_train, n_val + 1)
+        names = "\n".join(f"  {i}: {n}" for i, n in enumerate(classes))
+        z.writestr("data.yaml",
+                   "# MAMOGRAF to'liq YOLO dataset (rasm + label + split)\n"
+                   "path: .\ntrain: images/train\nval: images/val\n"
+                   f"nc: {len(classes)}\nnames:\n{names}\n")
+        z.writestr("README.txt",
+                   "MAMOGRAF to'liq YOLO dataset.\n"
+                   f"Train rasm: {n_train}, Val rasm: {n_val}, klasslar: {len(classes)}.\n\n"
+                   "Foydalanish:\n"
+                   "1) ZIP ni biror papkaga oching.\n"
+                   "2) Model Studio'da 'data.yaml' yo'lini kiriting va o'qiting,\n"
+                   "   yoki: yolo train data=data.yaml model=yolo11n.pt epochs=100 imgsz=1024\n")
+    return buf.getvalue()
+
+
+_EXPORT_FORMATS = {
+    "coco": ("application/json", "json"),
+    "yolo": ("application/zip", "zip"),
+    "voc": ("application/zip", "zip"),
+    "csv": ("text/csv; charset=utf-8", "csv"),
+}
+
+
 @app.get("/api/export")
-def export(format: str = "coco"):
+def export(format: str = "coco", imgsz: int = 1024, val_frac: float = 0.2):
     fmt = format.lower()
-    if fmt != "coco":
-        raise HTTPException(400, "only format=coco is supported")
-    coco = _build_coco()
-    body = json.dumps(coco, ensure_ascii=False, indent=2).encode("utf-8")
+    if fmt not in _EXPORT_FORMATS:
+        raise HTTPException(400, f"unsupported format; use one of: {', '.join(_EXPORT_FORMATS)}")
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    fname = f"annotations_coco_{stamp}.json"
+    media, ext = _EXPORT_FORMATS[fmt]
+
+    if fmt == "coco":
+        body = json.dumps(_build_coco(), ensure_ascii=False, indent=2).encode("utf-8")
+        fname = f"annotations_coco_{stamp}.json"
+    elif fmt == "yolo":
+        # TO'LIQ dataset: rasmlar + label'lar + train/val + data.yaml (o'qitishga tayyor)
+        body = _build_yolo_dataset_zip(imgsz=imgsz, val_frac=val_frac)
+        fname = f"yolo_dataset_{stamp}.zip"
+    else:
+        images = _export_images()
+        if fmt == "voc":
+            body = exporters.build_voc_zip(images)
+            fname = f"annotations_voc_{stamp}.zip"
+        else:  # csv
+            body = exporters.build_csv(images)
+            fname = f"annotations_{stamp}.csv"
+
     return StreamingResponse(
         io.BytesIO(body),
-        media_type="application/json",
+        media_type=media,
         headers={"Content-Disposition": f'attachment; filename="{fname}"'},
     )
 
@@ -2015,13 +4502,15 @@ def delete_template(
 ):
     with db_mod.get_conn() as c:
         row = c.execute(
-            "SELECT created_by FROM annotation_templates WHERE id = ?", (tpl_id,)
+            "SELECT * FROM annotation_templates WHERE id = ?", (tpl_id,)
         ).fetchone()
         if not row:
             raise HTTPException(404, "template not found")
         is_admin = user.get("role") == "admin"
-        if not is_admin and row[0] != user["sub"]:
+        if not is_admin and row["created_by"] != user["sub"]:
             raise HTTPException(403, "can only delete own templates")
+        audit_mod.trash_db_row("annotation_templates", dict(row), "template", tpl_id,
+                               label=f"Shablon: {row['name']}", deleted_by=user.get("sub"))
         c.execute("DELETE FROM annotation_templates WHERE id = ?", (tpl_id,))
         c.commit()
     return {"ok": True}
@@ -2289,12 +4778,73 @@ def db_delete_link(source: str, ref: str, _user: dict = Depends(auth_mod.require
     if not ref:
         raise HTTPException(400, "missing ref")
     with db_mod.get_conn() as c:
+        row = c.execute(
+            "SELECT * FROM dicom_patient_links WHERE source = ? AND ref = ?",
+            (source, ref),
+        ).fetchone()
+        if row:
+            audit_mod.trash_db_row("dicom_patient_links", dict(row), "db_link",
+                                   f"{source}:{ref}",
+                                   label=f"Bog'lanish: {source}/{ref} → {row['patient_id']}",
+                                   deleted_by=_user.get("sub"))
         c.execute(
             "DELETE FROM dicom_patient_links WHERE source = ? AND ref = ?",
             (source, ref),
         )
         c.commit()
     return {"ok": True}
+
+
+# --------------------------------------------------------------------------- #
+#  Audit log va Savatcha (faqat admin)                                         #
+# --------------------------------------------------------------------------- #
+@app.get("/api/audit")
+def audit_list(
+    username: Optional[str] = None,
+    action: Optional[str] = None,
+    since: Optional[str] = None,
+    until: Optional[str] = None,
+    q: Optional[str] = None,
+    limit: int = 200,
+    offset: int = 0,
+    _admin: dict = Depends(auth_mod.require_role("admin")),
+):
+    """Foydalanuvchi harakatlari jurnali (admin)."""
+    return audit_mod.list_audit(username, action, since, until, q, limit, offset)
+
+
+@app.get("/api/audit/users")
+def audit_user_list(_admin: dict = Depends(auth_mod.require_role("admin"))):
+    return {"users": audit_mod.audit_users()}
+
+
+@app.get("/api/trash")
+def trash_list(
+    include_restored: bool = False,
+    resource_type: Optional[str] = None,
+    _admin: dict = Depends(auth_mod.require_role("admin")),
+):
+    """Savatcha: o'chirilgan obyektlar (admin)."""
+    return {"items": audit_mod.list_trash(include_restored, resource_type)}
+
+
+@app.post("/api/trash/{trash_id}/restore")
+def trash_restore(trash_id: int, admin: dict = Depends(auth_mod.require_role("admin"))):
+    ok, msg = audit_mod.restore(trash_id, by=admin.get("sub"))
+    if not ok:
+        raise HTTPException(400, msg)
+    # Tiklangan model fayl bo'lsa — inference cache yangilanishi uchun belgilamaymiz
+    # (list_models har chaqirilganda papkani qayta o'qiydi)
+    return {"ok": True, "message": msg}
+
+
+@app.delete("/api/trash/{trash_id}")
+def trash_purge(trash_id: int, _admin: dict = Depends(auth_mod.require_role("admin"))):
+    """Savatchadagi obyektni butunlay o'chiradi (qaytarib bo'lmaydi)."""
+    ok, msg = audit_mod.purge(trash_id)
+    if not ok:
+        raise HTTPException(404, msg)
+    return {"ok": True, "message": msg}
 
 
 def _parse_dicom_name(name: Optional[str]) -> tuple[Optional[str], Optional[str]]:
@@ -2420,13 +4970,20 @@ def inference_status():
     info["available"] = ok
     info["error"] = err if not ok else None
     info["models_dir"] = str(inf.MODELS_DIR)
-    info["models"] = inf.list_models()
+    # Detection dropdown faqat detection modellarini ko'rsatadi; classification
+    # modellari (_cls.pt) alohida "Tashxis" paneli uchun cls_models'da qaytadi.
+    info["models"] = inf.list_detection_models()
+    info["cls_models"] = inf.list_cls_models()
+    info["gmic"] = bool(gmic_infer and gmic_infer.available())
     return info
 
 
 @app.get("/api/inference/models")
 def inference_models():
     return {"models": inf.list_models(), "models_dir": str(inf.MODELS_DIR)}
+
+
+ENSEMBLE_MODEL = "__ensemble__"
 
 
 class InferenceBody(BaseModel):
@@ -2439,6 +4996,8 @@ class InferenceBody(BaseModel):
     imgsz: int = 1024
     wc: Optional[float] = None
     ww: Optional[float] = None
+    tta: bool = False
+    models: Optional[list[str]] = None  # for ensemble; default = all available
 
 
 class BatchInferenceBody(BaseModel):
@@ -2448,6 +5007,17 @@ class BatchInferenceBody(BaseModel):
     iou: float = 0.5
     imgsz: int = 1024
     auto_save: bool = False
+    tta: bool = False
+    models: Optional[list[str]] = None
+
+
+def _run_inference(png_bytes: bytes, *, model: str, conf: float, iou: float, imgsz: int,
+                   tta: bool, models: Optional[list[str]]):
+    """Dispatch to a single model or the WBF ensemble of several models."""
+    if model == ENSEMBLE_MODEL:
+        names = models or [m["name"] for m in inf.list_models()]
+        return inf.infer_ensemble(png_bytes, names, conf=conf, iou=iou, imgsz=imgsz, tta=tta)
+    return inf.infer_png(png_bytes, model_name=model, conf=conf, iou=iou, imgsz=imgsz, tta=tta)
 
 
 @app.post("/api/inference/batch")
@@ -2475,9 +5045,9 @@ async def inference_batch(
         try:
             path = _resolve_dicom_path(src, ref)
             png_bytes = render_frame_png(path, frame=0, max_dim=2048)
-            inf_res = inf.infer_png(
-                png_bytes, model_name=body.model,
-                conf=body.conf, iou=body.iou, imgsz=body.imgsz,
+            inf_res = _run_inference(
+                png_bytes, model=body.model, conf=body.conf, iou=body.iou,
+                imgsz=body.imgsz, tta=body.tta, models=body.models,
             )
         except Exception as e:
             results.append({"source": src, "ref": ref, "ok": False, "error": str(e)})
@@ -2520,6 +5090,260 @@ async def inference_batch(
     return {"ok": True, "results": results, "count": len(results)}
 
 
+# --------------------------------------------------------------------------- #
+# (A3) Uncertainty heatmap — modellar kelishmagan joyni ko'rsatadi              #
+# --------------------------------------------------------------------------- #
+def _compute_uncertainty_map(
+    per_model_dets: list[list[dict]],
+    image_size_wh: tuple[int, int],
+) -> "tuple[object, dict]":
+    """Har piksel uchun noaniqlik = ovoz qarama-qarshiligi × o'rtacha ishonch.
+    Tushuntirish:
+      vote(p) = (necha model shu nuqtada lezyon ko'radi) / N
+      disagree(p) = 4 · vote · (1 - vote)        — peak vote=0.5 da
+      mean_conf(p) = ovoz bergan modellarning ishonchini o'rtachasi
+      heat(p) = disagree · mean_conf             — ikkalasi yuqori bo'lsa qizil
+    """
+    import numpy as np
+    W, H = image_size_wh
+    n_models = max(1, len(per_model_dets))
+    info = {"n_models": n_models, "max_heat": 0.0, "nonzero_pct": 0.0}
+    if n_models < 2:
+        return np.zeros((H, W), dtype=np.float32), info
+
+    vote = np.zeros((H, W), dtype=np.float32)
+    conf_sum = np.zeros((H, W), dtype=np.float32)
+
+    for dets in per_model_dets:
+        mask = np.zeros((H, W), dtype=bool)
+        cmap = np.zeros((H, W), dtype=np.float32)
+        for d in dets:
+            bbox = d.get("bbox") or [0, 0, 0, 0]
+            if len(bbox) < 4:
+                continue
+            # bbox normallashtirilgan [x,y,w,h] (0..1)
+            x = int(round(float(bbox[0]) * W))
+            y = int(round(float(bbox[1]) * H))
+            w = int(round(float(bbox[2]) * W))
+            h = int(round(float(bbox[3]) * H))
+            x2 = max(0, min(W, x + w))
+            y2 = max(0, min(H, y + h))
+            x = max(0, min(W, x))
+            y = max(0, min(H, y))
+            if x2 <= x or y2 <= y:
+                continue
+            mask[y:y2, x:x2] = True
+            c = float(d.get("confidence", 0.0))
+            cmap[y:y2, x:x2] = np.maximum(cmap[y:y2, x:x2], c)
+        vote += mask.astype(np.float32)
+        conf_sum += cmap
+
+    v_norm = vote / float(n_models)
+    disagreement = 4.0 * v_norm * (1.0 - v_norm)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        mean_conf = np.where(vote > 0, conf_sum / vote, 0.0)
+    heat = (disagreement * mean_conf).astype(np.float32)
+
+    info["max_heat"] = float(heat.max())
+    info["nonzero_pct"] = float((heat > 0.01).mean() * 100.0)
+    return heat, info
+
+
+def _render_uncertainty_png(heat) -> bytes:
+    """heat (HxW float32) -> RGBA PNG: sariq->qizil gradient, alpha = heat."""
+    import numpy as np
+    from PIL import Image
+    H, W = heat.shape
+    if heat.max() > 0:
+        h = heat / heat.max()
+    else:
+        h = heat
+    h = np.clip(h, 0.0, 1.0) ** 0.7  # gamma — yuqori qiymatlarni ko'rsatish uchun
+    rgba = np.zeros((H, W, 4), dtype=np.uint8)
+    rgba[..., 0] = 255                          # R doim 255
+    rgba[..., 1] = (255 * (1.0 - h)).astype(np.uint8)  # G susayadi -> qizillashadi
+    rgba[..., 2] = 0                            # B = 0
+    rgba[..., 3] = (200 * h).astype(np.uint8)   # alpha = heat
+    img = Image.fromarray(rgba, mode="RGBA")
+    buf = io.BytesIO()
+    img.save(buf, format="PNG", optimize=True)
+    return buf.getvalue()
+
+
+@app.post("/api/inference/uncertainty")
+@limiter.limit("10/minute")
+def inference_uncertainty(
+    request: Request,
+    body: InferenceBody,
+    _user: dict = Depends(auth_mod.require_user),
+):
+    """Bir nechta modelni ishga tushirib, noaniqlik xaritasini PNG sifatida qaytaradi.
+    body.models — solishtirish uchun modellar ro'yxati (kamida 2 ta). Bo'sh bo'lsa — barchasi.
+    """
+    _validate_source(body.source)
+    _validate_ref(body.source, body.ref)
+
+    if body.source == "upload":
+        path = UPLOAD_DIR / f"{body.ref}.dcm"
+    else:
+        path = _resolve_local(body.ref)
+
+    try:
+        png_bytes = render_frame_png(
+            path, frame=body.frame, wc=body.wc, ww=body.ww, max_dim=2048
+        )
+    except Exception as e:
+        raise HTTPException(500, f"render failed: {e}")
+
+    model_names = body.models or [m["name"] for m in inf.list_models()]
+    if len(model_names) < 2:
+        raise HTTPException(400, "Uncertainty kamida 2 ta modelni talab qiladi")
+
+    per_model_dets: list[list[dict]] = []
+    image_size_wh: Optional[tuple[int, int]] = None
+    used_models: list[str] = []
+    failed: list[str] = []
+    for m in model_names:
+        try:
+            res = inf.infer_png(
+                png_bytes, model_name=m,
+                conf=body.conf, iou=body.iou, imgsz=body.imgsz, tta=body.tta,
+            )
+        except Exception:
+            failed.append(m)
+            continue
+        per_model_dets.append(res.get("detections", []) or [])
+        used_models.append(m)
+        if image_size_wh is None:
+            sz = res.get("image_size") or [0, 0]
+            if len(sz) >= 2 and sz[0] > 0 and sz[1] > 0:
+                image_size_wh = (int(sz[0]), int(sz[1]))
+
+    if len(per_model_dets) < 2 or image_size_wh is None:
+        raise HTTPException(503, f"Yetarli model ishlamadi (used={used_models}, failed={failed})")
+
+    heat, info = _compute_uncertainty_map(per_model_dets, image_size_wh)
+    png = _render_uncertainty_png(heat)
+
+    headers = {
+        "X-Uncertainty-Models": ",".join(used_models),
+        "X-Uncertainty-Failed": ",".join(failed),
+        "X-Uncertainty-MaxHeat": f"{info['max_heat']:.4f}",
+        "X-Uncertainty-NonzeroPct": f"{info['nonzero_pct']:.2f}",
+        "X-Uncertainty-ImageW": str(image_size_wh[0]),
+        "X-Uncertainty-ImageH": str(image_size_wh[1]),
+    }
+    return StreamingResponse(io.BytesIO(png), media_type="image/png", headers=headers)
+
+
+# --------------------------------------------------------------------------- #
+# (A4) Smart-click segmentation — bir bosish bilan polygon                      #
+# --------------------------------------------------------------------------- #
+class SmartClickBody(BaseModel):
+    source: str
+    ref: str
+    frame: int = 0
+    x: float       # normallashtirilgan 0..1
+    y: float       # normallashtirilgan 0..1
+    wc: Optional[float] = None
+    ww: Optional[float] = None
+    tolerance: int = 25       # intensivlik chegaralari (0..255)
+    max_area_frac: float = 0.15  # rasm yuzasidan ko'pi tashlanadi
+
+
+@app.post("/api/inference/smart_click")
+@limiter.limit("60/minute")
+def inference_smart_click(
+    request: Request,
+    body: SmartClickBody,
+    _user: dict = Depends(auth_mod.require_user),
+):
+    """OpenCV asosida flood-fill + kontur soddalashtirish.
+    Bemorning bosgan nuqtasi atrofidagi o'xshash intensivlikdagi sohani topib,
+    polygon nuqtalarini (normallashtirilgan) qaytaradi."""
+    import numpy as np
+    import cv2
+
+    _validate_source(body.source)
+    _validate_ref(body.source, body.ref)
+    if not (0.0 <= body.x <= 1.0 and 0.0 <= body.y <= 1.0):
+        raise HTTPException(400, "x, y normallashtirilgan 0..1 bo'lishi kerak")
+
+    if body.source == "upload":
+        path = UPLOAD_DIR / f"{body.ref}.dcm"
+    else:
+        path = _resolve_local(body.ref)
+
+    try:
+        png_bytes = render_frame_png(path, frame=body.frame, wc=body.wc, ww=body.ww, max_dim=2048)
+    except Exception as e:
+        raise HTTPException(500, f"render failed: {e}")
+
+    arr = np.frombuffer(png_bytes, dtype=np.uint8)
+    img = cv2.imdecode(arr, cv2.IMREAD_GRAYSCALE)
+    if img is None:
+        raise HTTPException(500, "Image decode failed")
+    H, W = img.shape[:2]
+    px = int(round(body.x * (W - 1)))
+    py = int(round(body.y * (H - 1)))
+    px = max(0, min(W - 1, px))
+    py = max(0, min(H - 1, py))
+
+    # Flood fill maska
+    mask = np.zeros((H + 2, W + 2), dtype=np.uint8)
+    tol = int(max(1, min(120, body.tolerance)))
+    flags = 4 | cv2.FLOODFILL_FIXED_RANGE | (255 << 8)
+    try:
+        cv2.floodFill(img.copy(), mask, (px, py), 0, loDiff=tol, upDiff=tol, flags=flags)
+    except Exception as e:
+        raise HTTPException(500, f"floodFill failed: {e}")
+    region = mask[1:-1, 1:-1]
+    area = int(region.sum() // 255)
+    max_area = int(body.max_area_frac * W * H)
+    if area == 0:
+        raise HTTPException(400, "Hech narsa topilmadi — boshqa nuqtaga bosing")
+    if area > max_area:
+        # Juda katta — morfologik eroziyaga harakat qilamiz
+        k = max(3, min(31, int(min(W, H) * 0.005)) | 1)
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k))
+        region = cv2.erode(region, kernel, iterations=2)
+        area = int(region.sum() // 255)
+        if area > max_area or area == 0:
+            raise HTTPException(400, f"Soha juda katta ({100*area/(W*H):.1f}% rasm) — toleranceni kamaytiring")
+
+    # Kontur va polygon
+    contours, _ = cv2.findContours(region, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if not contours:
+        raise HTTPException(400, "Kontur topilmadi")
+    # Bosilgan nuqtani o'z ichiga olgan eng katta konturni tanlaymiz
+    best = None
+    for c in contours:
+        if cv2.pointPolygonTest(c, (px, py), False) >= 0:
+            if best is None or cv2.contourArea(c) > cv2.contourArea(best):
+                best = c
+    if best is None:
+        best = max(contours, key=cv2.contourArea)
+    # Soddalashtirish: 0.3% perimeter
+    eps = 0.003 * cv2.arcLength(best, True)
+    approx = cv2.approxPolyDP(best, eps, True)
+    if len(approx) < 3:
+        # juda agressiv — kamroq qiling
+        approx = cv2.approxPolyDP(best, eps * 0.3, True)
+    if len(approx) < 3:
+        raise HTTPException(400, "Polygon yaratib bo'lmadi")
+
+    pts = [[float(p[0][0]) / W, float(p[0][1]) / H] for p in approx]
+
+    return {
+        "points": pts,
+        "image_size": [W, H],
+        "click_pixel": [px, py],
+        "area_pixels": area,
+        "area_pct": round(100.0 * area / (W * H), 3),
+        "n_vertices": len(pts),
+    }
+
+
 @app.post("/api/inference/run")
 @limiter.limit("20/minute")
 def inference_run(request: Request, body: InferenceBody, _user: dict = Depends(auth_mod.require_user)):
@@ -2539,12 +5363,9 @@ def inference_run(request: Request, body: InferenceBody, _user: dict = Depends(a
         raise HTTPException(500, f"render failed: {e}")
 
     try:
-        result = inf.infer_png(
-            png_bytes,
-            model_name=body.model,
-            conf=body.conf,
-            iou=body.iou,
-            imgsz=body.imgsz,
+        result = _run_inference(
+            png_bytes, model=body.model, conf=body.conf, iou=body.iou,
+            imgsz=body.imgsz, tta=body.tta, models=body.models,
         )
     except FileNotFoundError as e:
         raise HTTPException(404, str(e))
@@ -2553,6 +5374,68 @@ def inference_run(request: Request, body: InferenceBody, _user: dict = Depends(a
     except Exception as e:
         raise HTTPException(500, f"inference failed: {e}")
     return result
+
+
+class ClassifyBody(BaseModel):
+    source: str
+    ref: str
+    frame: int = 0
+    wc: Optional[float] = None
+    ww: Optional[float] = None
+    model: Optional[str] = None
+    imgsz: int = 384
+
+
+@app.post("/api/inference/classify")
+@limiter.limit("30/minute")
+def inference_classify(request: Request, body: ClassifyBody, _user: dict = Depends(auth_mod.require_user)):
+    """Joriy rasm uchun tashxis (benign / malignant) — har klass ehtimoli.
+
+    Afzallik: GMIC (NYU, bizda MIL fine-tune qilingan) — mavjud bo'lsa shu;
+    aks holda YOLO `_cls.pt` klassifikatori.
+    """
+    _validate_source(body.source)
+    _validate_ref(body.source, body.ref)
+
+    if body.source == "upload":
+        path = UPLOAD_DIR / f"{body.ref}.dcm"
+    else:
+        path = _resolve_local(body.ref)
+
+    use_gmic = bool(gmic_infer and gmic_infer.available()) and body.model in (None, "", "gmic")
+    if use_gmic:
+        try:
+            g = gmic_infer.predict_dicom(path)
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        except Exception as e:
+            raise HTTPException(500, f"GMIC tashxis xato: {e}")
+        return {
+            "model": g["model"],
+            "top1_label": g["label"],
+            "top1_conf": max(g["benign"], g["malignant"]),
+            "probs": {"benign": g["benign"], "malignant": g["malignant"]},
+            "view": g.get("view"),
+            "saliency_png": g.get("saliency_png"),
+            "note": "GMIC qoralama — backbone NYU Hologic'da, boshqa apparat uchun klinik emas",
+        }
+
+    cls_models = inf.list_cls_models()
+    if not cls_models:
+        raise HTTPException(400, "Tashxis modeli topilmadi (GMIC yoki app/models/*_cls.pt)")
+    model = body.model or cls_models[0]["name"]
+    if not inf.is_cls_model(model):
+        raise HTTPException(400, "Bu klassifikatsiya modeli emas")
+    try:
+        png_bytes = render_frame_png(path, frame=body.frame, wc=body.wc, ww=body.ww, max_dim=2048)
+    except Exception as e:
+        raise HTTPException(500, f"render failed: {e}")
+    try:
+        return inf.classify_png(png_bytes, model_name=model, imgsz=body.imgsz)
+    except RuntimeError as e:
+        raise HTTPException(503, str(e))
+    except Exception as e:
+        raise HTTPException(500, f"classify failed: {e}")
 
 
 @app.websocket("/ws/dicom")
@@ -2772,5 +5655,160 @@ def research_review_decide(
         c.commit()
     return {"id": review_id, "status": body.status, "n_final": len(final), "decided_at": now}
 
+
+@app.get("/", include_in_schema=False)
+def landing_page():
+    """Bosh sahifa — loyiha haqida, imkoniyatlar va radiomika. Chap burchakda Kirish.
+    Ilovaning o'zi /app da (login modal o'sha yerda avtomatik ochiladi)."""
+    f = STATIC_DIR / "landing.html"
+    if not f.exists():
+        return FileResponse(str(STATIC_DIR / "index.html"), media_type="text/html")
+    return FileResponse(str(f), media_type="text/html")
+
+
+@app.get("/app", include_in_schema=False)
+def app_page():
+    """Asosiy ilova (DICOM viewer + login modal)."""
+    return FileResponse(str(STATIC_DIR / "index.html"), media_type="text/html")
+
+
+# --------------------------------------------------------------------------- #
+# Math Mentor reverse-proxy: /mentor/* -> mentor xizmati (10.10.0.75:8092)      #
+# Bu yo'l static mount'dan OLDIN turishi shart (aks holda "/" hammasini yutadi).#
+# --------------------------------------------------------------------------- #
+import httpx as _mentor_httpx
+from fastapi import Request as _MentorRequest
+from fastapi.responses import Response as _MentorResponse, RedirectResponse as _MentorRedirect
+
+_MENTOR_URL = os.environ.get("MENTOR_URL", "http://10.10.0.75:8092").rstrip("/")
+
+
+@app.get("/mentor", include_in_schema=False)
+def _mentor_root_redirect():
+    return _MentorRedirect(url="/mentor/")
+
+
+@app.api_route("/mentor/{path:path}", include_in_schema=False,
+               methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"])
+async def _mentor_proxy(path: str, request: _MentorRequest):
+    """/mentor/<path> ni mentor xizmatiga (/<path>) shaffof uzatadi."""
+    target = f"{_MENTOR_URL}/{path}"
+    body = await request.body()
+    fwd_headers = {k: v for k, v in request.headers.items()
+                   if k.lower() not in ("host", "content-length")}
+    try:
+        async with _mentor_httpx.AsyncClient(timeout=900.0) as client:
+            rr = await client.request(request.method, target,
+                                      params=request.query_params,
+                                      content=body, headers=fwd_headers)
+    except Exception as e:  # noqa: BLE001
+        return _MentorResponse(content=f"Mentor xizmatiga ulanib bo'lmadi: {e}".encode(),
+                               status_code=502)
+    drop = {"content-encoding", "transfer-encoding", "connection", "content-length"}
+    out_headers = {k: v for k, v in rr.headers.items() if k.lower() not in drop}
+    return _MentorResponse(content=rr.content, status_code=rr.status_code,
+                           headers=out_headers,
+                           media_type=rr.headers.get("content-type"))
+
+
+
+# --------------------------------------------------------------------------- #
+# Server panel reverse-proxy: /server/* -> monitoring paneli (10.10.0.75:8095) #
+# Mentor proxy'si bilan bir xil andoza; static mount'dan OLDIN turishi shart.  #
+# --------------------------------------------------------------------------- #
+_SERVERPANEL_URL = os.environ.get("SERVERPANEL_URL", "http://10.10.0.75:8095").rstrip("/")
+
+
+@app.get("/server", include_in_schema=False)
+def _serverpanel_root_redirect():
+    return _MentorRedirect(url="/server/")
+
+
+@app.api_route("/server/{path:path}", include_in_schema=False,
+               methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"])
+async def _serverpanel_proxy(path: str, request: _MentorRequest):
+    """/server/<path> ni monitoring paneliga (/<path>) shaffof uzatadi."""
+    target = f"{_SERVERPANEL_URL}/{path}"
+    body = await request.body()
+    fwd_headers = {k: v for k, v in request.headers.items()
+                   if k.lower() not in ("host", "content-length")}
+    try:
+        async with _mentor_httpx.AsyncClient(timeout=120.0) as client:
+            rr = await client.request(request.method, target,
+                                      params=request.query_params,
+                                      content=body, headers=fwd_headers)
+    except Exception as e:  # noqa: BLE001
+        return _MentorResponse(content=f"Server paneliga ulanib bo'lmadi: {e}".encode(),
+                               status_code=502)
+    drop = {"content-encoding", "transfer-encoding", "connection", "content-length"}
+    out_headers = {k: v for k, v in rr.headers.items() if k.lower() not in drop}
+    return _MentorResponse(content=rr.content, status_code=rr.status_code,
+                           headers=out_headers,
+                           media_type=rr.headers.get("content-type"))
+
+
+
+# --------------------------------------------------------------------------- #
+# iqttalim & harakat reverse-proxy (edge katch-all faqat mamograf'ga uzatadi). #
+# Prefiks SAQLANADI: /iqttalim/x -> 8094/iqttalim/x, /harakat/x -> 8093/harakat/x
+# --------------------------------------------------------------------------- #
+_EXTRA_PROXIES = {
+    "iqttalim": os.environ.get("IQTTALIM_URL", "http://10.10.0.75:8094").rstrip("/"),
+    "harakat": os.environ.get("HARAKAT_URL", "http://10.10.0.75:8093").rstrip("/"),
+}
+
+
+async def _extra_proxy(prefix: str, path: str, request: _MentorRequest):
+    target = f"{_EXTRA_PROXIES[prefix]}/{prefix}/{path}"
+    body = await request.body()
+    # Host SAQLANADI: Django (iqttalim) CSRF/ALLOWED_HOSTS asl domenni kutadi
+    fwd_headers = {k: v for k, v in request.headers.items()
+                   if k.lower() != "content-length"}
+    try:
+        async with _mentor_httpx.AsyncClient(timeout=900.0,
+                                             follow_redirects=False) as client:
+            rr = await client.request(request.method, target,
+                                      params=request.query_params,
+                                      content=body, headers=fwd_headers)
+    except Exception as e:  # noqa: BLE001
+        return _MentorResponse(content=f"{prefix} xizmatiga ulanib bo'lmadi: {e}".encode(),
+                               status_code=502)
+    drop = {"content-encoding", "transfer-encoding", "connection",
+            "content-length", "content-type"}
+    resp = _MentorResponse(content=rr.content, status_code=rr.status_code,
+                           media_type=rr.headers.get("content-type"))
+    # multi_items: bir nechta Set-Cookie header yo'qolmasligi shart (Django sessiya+CSRF)
+    for k, v in rr.headers.multi_items():
+        if k.lower() not in drop:
+            resp.headers.append(k, v)
+    return resp
+
+
+@app.get("/iqttalim", include_in_schema=False)
+def _iqttalim_root_redirect():
+    return _MentorRedirect(url="/iqttalim/")
+
+
+@app.api_route("/iqttalim/{path:path}", include_in_schema=False,
+               methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"])
+async def _iqttalim_proxy(path: str, request: _MentorRequest):
+    return await _extra_proxy("iqttalim", path, request)
+
+
+@app.get("/harakat", include_in_schema=False)
+def _harakat_root_redirect():
+    return _MentorRedirect(url="/harakat/")
+
+
+@app.api_route("/harakat/{path:path}", include_in_schema=False,
+               methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"])
+async def _harakat_proxy(path: str, request: _MentorRequest):
+    return await _extra_proxy("harakat", path, request)
+
+
+# boolfs (Xamdamov: bulcha belgilar) — StaticFiles mount'idan OLDIN ulanishi shart,
+# aks holda "/" mount barcha /api/boolfs/* so'rovlarni ushlab qoladi.
+if boolfs_api is not None:
+    app.include_router(boolfs_api.router)
 
 app.mount("/", StaticFiles(directory=str(STATIC_DIR), html=True), name="static")

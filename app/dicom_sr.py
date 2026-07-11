@@ -57,6 +57,108 @@ def _container_item(label: str, children: list[Dataset]) -> Dataset:
     return c
 
 
+def report_to_sr(
+    src_path: Path,
+    report_text: str,
+    findings: Optional[dict] = None,
+    author: Optional[str] = None,
+    verified: bool = False,
+) -> bytes:
+    """Tayyor mammografiya hisobotini (narrativ matn + strukturaviy topilmalar)
+    DICOM Comprehensive SR sifatida quradi. Bemor/study metadata manba DICOM'dan
+    meros qilib olinadi."""
+    src = pydicom.dcmread(str(src_path), stop_before_pixels=True, force=True)
+
+    now = datetime.now()
+    sr_date = now.strftime("%Y%m%d")
+    sr_time = now.strftime("%H%M%S")
+
+    meta = FileMetaDataset()
+    meta.MediaStorageSOPClassUID = COMPREHENSIVE_SR_CLASS_UID
+    meta.MediaStorageSOPInstanceUID = generate_uid()
+    meta.TransferSyntaxUID = ExplicitVRLittleEndian
+    meta.ImplementationClassUID = generate_uid()
+    meta.ImplementationVersionName = "MAMOGRAF_SR"
+
+    sr = FileDataset(None, {}, file_meta=meta, preamble=b"\0" * 128)
+    sr.SOPClassUID = meta.MediaStorageSOPClassUID
+    sr.SOPInstanceUID = meta.MediaStorageSOPInstanceUID
+    sr.Modality = "SR"
+    sr.SeriesInstanceUID = generate_uid()
+    sr.StudyInstanceUID = src.get("StudyInstanceUID", generate_uid())
+    sr.SeriesNumber = 9998
+    sr.InstanceNumber = 1
+    sr.SeriesDescription = "MAMOGRAF report"
+
+    for tag in (
+        "PatientName", "PatientID", "PatientBirthDate", "PatientSex",
+        "StudyDate", "StudyTime", "AccessionNumber", "ReferringPhysicianName",
+    ):
+        if tag in src:
+            try:
+                sr[tag] = src[tag]
+            except Exception:
+                pass
+
+    sr.ContentDate = sr_date
+    sr.ContentTime = sr_time
+    sr.InstanceCreationDate = sr_date
+    sr.InstanceCreationTime = sr_time
+    sr.SpecificCharacterSet = "ISO_IR 192"
+
+    if author:
+        author_ds = Dataset()
+        author_ds.PersonName = author
+        sr.AuthorObserverSequence = [author_ds]
+
+    sr.CompletionFlag = "COMPLETE"
+    sr.VerificationFlag = "VERIFIED" if verified else "UNVERIFIED"
+    sr.PreliminaryFlag = "FINAL"
+
+    sr.ValueType = "CONTAINER"
+    sr.ContinuityOfContent = "SEPARATE"
+    sr.ConceptNameCodeSequence = [
+        _coded_concept("11528-7", "LN", "Radiology Report")
+    ]
+
+    children: list[Dataset] = [_text_item("Report", report_text or "")]
+
+    findings = findings or {}
+    overall = findings.get("overall_birads")
+    if overall:
+        children.append(_text_item("Assessment", f"BI-RADS {overall}"))
+    rec = findings.get("recommendation")
+    if rec:
+        children.append(_text_item("Recommendation", rec))
+
+    lesion_items: list[Dataset] = []
+    for i, l in enumerate(findings.get("lesions", []) or [], start=1):
+        parts = [f"#{i} {l.get('type', '')}".strip()]
+        if l.get("laterality"):
+            parts.append(f"laterallik: {l['laterality']}")
+        if l.get("view"):
+            parts.append(f"proeksiya: {l['view']}")
+        if l.get("quadrant"):
+            parts.append(f"lokalizatsiya: {l['quadrant']}")
+        if l.get("size_mm"):
+            parts.append(f"o'lcham: ~{float(l['size_mm']):.0f} mm")
+        if l.get("margin"):
+            parts.append(f"chegara: {l['margin']}")
+        if l.get("birads"):
+            parts.append(f"BI-RADS: {l['birads']}")
+        lesion_items.append(_text_item("Finding", "\n".join(parts)))
+    if lesion_items:
+        children.append(_container_item("Findings", lesion_items))
+
+    sr.ContentSequence = children
+
+    buf = io.BytesIO()
+    sr.is_little_endian = True
+    sr.is_implicit_VR = False
+    sr.save_as(buf, write_like_original=False)
+    return buf.getvalue()
+
+
 def annotations_to_sr(
     src_path: Path,
     annotations: list[dict],
@@ -152,6 +254,8 @@ def annotations_to_sr(
             text_lines.insert(1, f"  BI-RADS: {bi_rads}")
         if a.get("created_by"):
             text_lines.append(f"  yaratdi: {a.get('created_by')}")
+        if a.get("ai_source"):
+            text_lines.append("  AI batch (izoh): AI batch tomonidan yaratilgan")
         if a.get("reviewed_by"):
             text_lines.append(f"  ko'rib chiqdi: {a.get('reviewed_by')}")
         if a.get("review_note"):

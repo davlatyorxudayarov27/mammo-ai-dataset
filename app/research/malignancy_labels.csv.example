@@ -1,0 +1,6 @@
+ref,annotation_id,outcome
+# ref = app/uploads/<ref>.dcm fayl id; annotation_id = (ixtiyoriy) aniq annotatsiya id
+# outcome = benign | malignant (yoki 0 | 1) — PATOLOGIYA (biopsiya) bilan tasdiqlangan
+# annotation_id bo'sh bo'lsa, shu ref'dagi barcha massa annotatsiyalariga tegishli
+18cf5a48120e4c8aafe260ffab91f4e5,,malignant
+9b2443dd03704b37ba851a3b9160ad9d,7b012d7f662047709aac0f7340391dc3,benign

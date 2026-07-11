@@ -69,6 +69,25 @@ function colorFor(label) {
   return m ? m.color : '#ff5050';
 }
 
+// (A2) AI annotation zonasi -> rang. Backend `zone` maydonida jo'natadi.
+const AI_ZONE_COLORS = {
+  auto_accept: '#22c55e',   // yashil
+  review:      '#eab308',   // sariq
+  suspect:     '#ef4444',   // qizil (pulsatsiya — CSS .ai-zone-suspect orqali)
+};
+const AI_ANN_COLOR = '#86efac'; // AI batch (created_by="ai:*") belgilari — och yashil, insondan farqli
+function isAiAnn(a) {
+  return !!(a && a.created_by && String(a.created_by).indexOf('ai:') === 0);
+}
+function colorForAnn(a) {
+  if (isAiAnn(a)) return AI_ANN_COLOR;                              // AI — och yashil
+  if (a && a.zone && AI_ZONE_COLORS[a.zone]) return AI_ZONE_COLORS[a.zone];
+  return colorFor(a && a.label);
+}
+function aiZoneClass(a) {
+  return (a && a.zone) ? ` ai-zone-${a.zone}` : '';
+}
+
 function refSource() {
   if (!state.current) return null;
   return state.current.kind === 'upload' ? 'upload' : 'local';
@@ -128,6 +147,11 @@ function updateUserBar() {
     $('overviewBtn').hidden = false;
     $('auditBtn').hidden = !(state._user.role === 'admin' || state._user.role === 'reviewer');
     $('reviewBtn').hidden = !(state._user.role === 'admin' || state._user.role === 'reviewer');
+    $('exportAnnBtn').hidden = false;
+    $('reportBtn').hidden = false;
+    $('trainPrepBtn').hidden = !(state._user.role === 'admin' || state._user.role === 'reviewer');
+    $('modelMgrBtn').hidden = !(state._user.role === 'admin' || state._user.role === 'reviewer');
+    const ms = $('modelStudioLink'); if (ms) ms.hidden = !(state._user.role === 'admin' || state._user.role === 'reviewer');
     $('totpBtn').hidden = false;
     $('totpBtn').textContent = state._user.totp_enrolled ? '🔒' : '🔓';
     $('totpBtn').title = state._user.totp_enrolled
@@ -143,6 +167,12 @@ function updateUserBar() {
     $('overviewBtn').hidden = true;
     $('auditBtn').hidden = true;
     $('reviewBtn').hidden = true;
+    $('exportAnnBtn').hidden = true;
+    $('reportBtn').hidden = true;
+    $('trainPrepBtn').hidden = true;
+    $('modelMgrBtn').hidden = true;
+    const ms2 = $('modelStudioLink'); if (ms2) ms2.hidden = true;
+    $('activeLearnBadge').hidden = true;
     $('totpBtn').hidden = true;
     bell.hidden = true;
     login.hidden = !state.authRequired;
@@ -202,6 +232,8 @@ async function doLogin(username, password, totpCode) {
 }
 
 function doLogout() {
+  // Server HttpOnly auth-cookie'ni tozalasin (JS o'zi o'chira olmaydi).
+  api('/api/auth/logout', { method: 'POST' }).catch(() => {});
   setToken(null);
   state._user = null;
   updateUserBar();
@@ -307,7 +339,8 @@ async function loadDashboard() {
     sub2.style.opacity = '0.7';
     const updated = (it.updated_at || '').slice(0, 16).replace('T', ' ');
     const reviewer = it.reviewed_by ? ` · ${it.status === 'approved' ? '✓' : '✗'}${it.reviewed_by}` : '';
-    sub2.textContent = `${it.created_by || '—'} · ${updated}${reviewer}`;
+    const aiMark = it.ai_source ? ' · 🤖 AI batch (izoh)' : '';
+    sub2.textContent = `${it.created_by || '—'}${aiMark} · ${updated}${reviewer}`;
     left.appendChild(sub2);
 
     if (it.review_note && it.status === 'rejected') {
@@ -481,6 +514,161 @@ async function openAdminModal() {
   await renderAdminUsers();
 }
 
+// Admin bo'limlari orasida o'tish navigatsiyasi
+function _adminNav(active) {
+  const nav = document.createElement('div');
+  nav.style.cssText = 'display:flex;gap:6px;margin-bottom:12px;border-bottom:1px solid var(--border);padding-bottom:8px';
+  const tabs = [
+    ['users', '👥 Foydalanuvchilar', renderAdminUsers],
+    ['audit', '📋 Audit log', renderAdminAudit],
+    ['trash', '🗑 Savatcha', renderAdminTrash],
+  ];
+  for (const [key, label, fn] of tabs) {
+    const b = document.createElement('button');
+    b.textContent = label;
+    b.style.cssText = 'padding:5px 10px;font-size:12px;border-radius:4px;cursor:pointer;border:1px solid var(--border);' +
+      (key === active ? 'background:var(--accent,#3b82f6);color:#fff;border-color:var(--accent,#3b82f6)' : 'background:var(--panel)');
+    b.addEventListener('click', () => fn());
+    nav.appendChild(b);
+  }
+  return nav;
+}
+
+function _fmtTs(ts) {
+  if (!ts) return '';
+  try { return new Date(ts).toLocaleString(); } catch (e) { return ts; }
+}
+
+async function renderAdminAudit() {
+  const body = $('adminBody');
+  body.innerHTML = '';
+  body.appendChild(_adminNav('audit'));
+
+  const bar = document.createElement('div');
+  bar.style.cssText = 'display:flex;gap:8px;align-items:center;margin-bottom:10px;flex-wrap:wrap';
+  bar.innerHTML = `
+    <input id="auUser" placeholder="foydalanuvchi" style="width:130px;padding:5px;font-size:12px"/>
+    <input id="auQ" placeholder="qidiruv (path/amal)" style="width:180px;padding:5px;font-size:12px"/>
+    <input id="auSince" type="date" style="padding:5px;font-size:12px" title="dan"/>
+    <button id="auGo" style="padding:5px 10px;font-size:12px;cursor:pointer">Filtr</button>
+    <span id="auCount" style="font-size:11px;color:var(--muted)"></span>`;
+  body.appendChild(bar);
+
+  const tableWrap = document.createElement('div');
+  tableWrap.style.cssText = 'max-height:60vh;overflow:auto';
+  body.appendChild(tableWrap);
+
+  async function load() {
+    tableWrap.innerHTML = '<div class="report-empty">Yuklanmoqda…</div>';
+    const p = new URLSearchParams();
+    const u = $('auUser').value.trim(); if (u) p.set('username', u);
+    const q = $('auQ').value.trim(); if (q) p.set('q', q);
+    const s = $('auSince').value; if (s) p.set('since', s);
+    p.set('limit', '500');
+    let data;
+    try { data = await apiJson('/api/audit?' + p.toString()); }
+    catch (e) { tableWrap.innerHTML = `<div class="admin-err">${e.message}</div>`; return; }
+    $('auCount').textContent = `${data.items.length} / ${data.total} yozuv`;
+    if (!data.items.length) { tableWrap.innerHTML = '<div class="report-empty">Yozuv yo\'q</div>'; return; }
+    const rows = data.items.map(r => `
+      <tr>
+        <td style="white-space:nowrap">${_fmtTs(r.ts)}</td>
+        <td>${r.username || '<i>—</i>'}</td>
+        <td><code>${r.action || ''}</code></td>
+        <td>${r.method || ''}</td>
+        <td style="max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${(r.path||'').replace(/"/g,'')}">${r.path || ''}</td>
+        <td>${r.status || ''}</td>
+        <td>${r.ip || ''}</td>
+      </tr>`).join('');
+    tableWrap.innerHTML = `<table class="admin-table" style="width:100%;font-size:12px;border-collapse:collapse">
+      <thead><tr style="text-align:left;color:var(--muted)">
+        <th>Vaqt</th><th>Foydalanuvchi</th><th>Amal</th><th>Metod</th><th>Yo'l</th><th>Status</th><th>IP</th>
+      </tr></thead><tbody>${rows}</tbody></table>`;
+  }
+  $('auGo').addEventListener('click', load);
+  $('auQ').addEventListener('keydown', e => { if (e.key === 'Enter') load(); });
+  await load();
+}
+
+async function renderAdminTrash() {
+  const body = $('adminBody');
+  body.innerHTML = '';
+  body.appendChild(_adminNav('trash'));
+
+  const bar = document.createElement('div');
+  bar.style.cssText = 'display:flex;gap:8px;align-items:center;margin-bottom:10px';
+  bar.innerHTML = `
+    <label style="font-size:12px;display:flex;align-items:center;gap:4px">
+      <input type="checkbox" id="trShowRestored"/> Tiklanganlarni ham ko'rsatish
+    </label>
+    <button id="trRefresh" style="padding:5px 10px;font-size:12px;cursor:pointer">↻ Yangilash</button>`;
+  body.appendChild(bar);
+
+  const wrap = document.createElement('div');
+  wrap.style.cssText = 'max-height:60vh;overflow:auto';
+  body.appendChild(wrap);
+
+  async function load() {
+    wrap.innerHTML = '<div class="report-empty">Yuklanmoqda…</div>';
+    const inc = $('trShowRestored').checked ? '?include_restored=true' : '';
+    let data;
+    try { data = await apiJson('/api/trash' + inc); }
+    catch (e) { wrap.innerHTML = `<div class="admin-err">${e.message}</div>`; return; }
+    if (!data.items.length) { wrap.innerHTML = '<div class="report-empty">Savatcha bo\'sh</div>'; return; }
+    wrap.innerHTML = '';
+    const table = document.createElement('table');
+    table.style.cssText = 'width:100%;font-size:12px;border-collapse:collapse';
+    table.innerHTML = `<thead><tr style="text-align:left;color:var(--muted)">
+      <th>O'chirilgan</th><th>Tur</th><th>Nomi</th><th>Kim</th><th>Holat</th><th></th>
+    </tr></thead>`;
+    const tb = document.createElement('tbody');
+    for (const it of data.items) {
+      const tr = document.createElement('tr');
+      const restored = !!it.restored_at;
+      tr.innerHTML = `
+        <td style="white-space:nowrap">${_fmtTs(it.ts)}</td>
+        <td><code>${it.resource_type}</code></td>
+        <td style="max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${(it.label||'').replace(/"/g,'')}">${it.label || it.resource_id}</td>
+        <td>${it.deleted_by || '—'}</td>
+        <td>${restored ? `<span style="color:#22c55e">✓ tiklangan</span>` : '<span style="color:var(--muted)">savatchada</span>'}</td>`;
+      const act = document.createElement('td');
+      act.style.cssText = 'white-space:nowrap;text-align:right';
+      if (!restored) {
+        const rb = document.createElement('button');
+        rb.textContent = '♻️ Tiklash';
+        rb.style.cssText = 'padding:3px 8px;font-size:11px;cursor:pointer;margin-right:4px';
+        rb.addEventListener('click', async () => {
+          rb.disabled = true;
+          try {
+            const r = await apiJson(`/api/trash/${it.id}/restore`, { method: 'POST' });
+            alert(r.message || 'Tiklandi');
+            await load();
+            if (typeof loadAiStatus === 'function') loadAiStatus().catch(()=>{});
+          } catch (e) { alert('Xato: ' + e.message); rb.disabled = false; }
+        });
+        act.appendChild(rb);
+      }
+      const pb = document.createElement('button');
+      pb.textContent = '🗑 Butunlay';
+      pb.title = 'Butunlay o\'chirish (qaytarib bo\'lmaydi)';
+      pb.style.cssText = 'padding:3px 8px;font-size:11px;cursor:pointer;color:#ef4444';
+      pb.addEventListener('click', async () => {
+        if (!confirm('Butunlay o\'chirilsinmi? Bu amalni qaytarib bo\'lmaydi.')) return;
+        try { await api(`/api/trash/${it.id}`, { method: 'DELETE' }); await load(); }
+        catch (e) { alert('Xato: ' + e.message); }
+      });
+      act.appendChild(pb);
+      tr.appendChild(act);
+      tb.appendChild(tr);
+    }
+    table.appendChild(tb);
+    wrap.appendChild(table);
+  }
+  $('trRefresh').addEventListener('click', load);
+  $('trShowRestored').addEventListener('change', load);
+  await load();
+}
+
 async function renderAdminUsers() {
   const body = $('adminBody');
   body.innerHTML = '<div class="report-empty">Yuklanmoqda…</div>';
@@ -492,6 +680,7 @@ async function renderAdminUsers() {
     return;
   }
   body.innerHTML = '';
+  body.appendChild(_adminNav('users'));
 
   let settings = { totp_required_roles: [] };
   try { settings = await apiJson('/api/settings'); } catch (e) {}
@@ -697,6 +886,8 @@ async function loadAiStatus() {
   }
   state.aiAvailable = !!s.available && (s.models || []).length > 0;
   state.aiModels = s.models || [];
+  state.clsModels = s.cls_models || [];
+  state.gmic = !!s.gmic;
   state.aiDevice = s.device_name || s.device;
   state.aiInstalled = !!s.available;
   const sel = $('aiModelSelect');
@@ -707,20 +898,134 @@ async function loadAiStatus() {
     o.textContent = m.stem;
     sel.appendChild(o);
   }
+  // Ensemble (Weighted Boxes Fusion of all models) — only meaningful with ≥2 models.
+  if (state.aiModels.length >= 2) {
+    const o = document.createElement('option');
+    o.value = '__ensemble__';
+    o.textContent = '🧬 Ensemble (barcha modellar · WBF)';
+    sel.appendChild(o);
+  }
   if (state.aiAvailable) {
     sel.hidden = false;
     $('aiRunBtn').hidden = false;
     $('aiThresholdWrap').hidden = false;
+    $('aiTtaWrap').hidden = false;
     $('aiRunBtn').title = `AI tahlil (${state.aiDevice})`;
+    // (A3) Heatmap tugmasi — kamida 2 ta model bo'lsa ko'rinadi
+    const hb = $('aiHeatmapBtn');
+    if (hb) hb.hidden = !(state.aiModels && state.aiModels.length >= 2);
   } else if (state.aiInstalled) {
     setStatus(`AI tayyor, lekin model topilmadi (app/models/*.pt qo'shing)`);
   }
+  // 🩺 Tashxis tugmasi — GMIC mavjud yoki ultralytics _cls model bo'lsa
+  const db = $('diagBtn');
+  if (db) db.hidden = !(state.gmic || (state.aiInstalled && state.clsModels.length > 0));
+}
+
+function closeAllMultiSelects() {
+  // .ms parent'idagi va body'ga portallangan ms-panel'lar
+  document.querySelectorAll('.ms .ms-panel, .ms-panel.ms-portal').forEach(p => { p.hidden = true; });
+}
+document.addEventListener('click', closeAllMultiSelects);
+
+// Reusable checkbox dropdown for picking one OR several labels.
+// opts: { selected: string[], onChange(arr), compact?: bool, placeholder?: string }
+function buildLabelMultiSelect(opts) {
+  const host = document.createElement('span');
+  host.className = 'ms' + (opts.compact ? ' ms-compact' : '');
+  let selected = [...(opts.selected || [])];
+
+  const toggle = document.createElement('button');
+  toggle.type = 'button';
+  toggle.className = 'ms-toggle';
+
+  const panel = document.createElement('div');
+  panel.className = 'ms-panel';
+  panel.hidden = true;
+
+  function renderToggle() {
+    if (selected.length === 0) {
+      toggle.textContent = opts.placeholder || 'Label tanlang';
+      toggle.classList.remove('has-sel');
+    } else {
+      toggle.textContent = selected.join(', ');
+      toggle.classList.add('has-sel');
+    }
+    toggle.title = toggle.textContent;
+  }
+
+  function buildOptions() {
+    panel.innerHTML = '';
+    for (const l of state.labels) {
+      const opt = document.createElement('label');
+      opt.className = 'ms-opt';
+      const cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.checked = selected.includes(l.name);
+      const dot = document.createElement('span');
+      dot.className = 'ms-dot';
+      dot.style.background = l.color;
+      const name = document.createElement('span');
+      name.className = 'ms-name';
+      name.textContent = l.name;
+      opt.appendChild(cb); opt.appendChild(dot); opt.appendChild(name);
+      cb.addEventListener('change', () => {
+        if (cb.checked) {
+          if (!selected.includes(l.name)) selected.push(l.name);
+        } else {
+          selected = selected.filter(x => x !== l.name);
+        }
+        renderToggle();
+        if (opts.onChange) opts.onChange([...selected]);
+      });
+      opt.addEventListener('click', e => e.stopPropagation());
+      panel.appendChild(opt);
+    }
+  }
+
+  // (Bug fix) — panelni portal sifatida body'ga ko'chiramiz, overflow:hidden
+  // ancestor (meta-pane) tomonidan kesilmasin
+  function positionPanel() {
+    const r = toggle.getBoundingClientRect();
+    panel.style.left = `${Math.round(r.left)}px`;
+    panel.style.top = `${Math.round(r.bottom + 4)}px`;
+    panel.style.minWidth = `${Math.max(180, Math.round(r.width))}px`;
+    const panelRect = panel.getBoundingClientRect();
+    if (panelRect.bottom > window.innerHeight - 10) {
+      panel.style.top = `${Math.round(r.top - panelRect.height - 4)}px`;
+    }
+  }
+  toggle.addEventListener('click', e => {
+    e.stopPropagation();
+    const willOpen = panel.hidden;
+    closeAllMultiSelects();
+    if (willOpen) {
+      buildOptions();
+      panel.classList.add('ms-portal');
+      if (panel.parentElement !== document.body) document.body.appendChild(panel);
+      panel.hidden = false;
+      positionPanel();
+    }
+  });
+  window.addEventListener('scroll', () => { if (!panel.hidden) positionPanel(); }, true);
+  window.addEventListener('resize', () => { if (!panel.hidden) positionPanel(); });
+
+  host._msSet = (arr) => { selected = [...(arr || [])]; renderToggle(); };
+  host._msGet = () => [...selected];
+
+  renderToggle();
+  host.appendChild(toggle);
+  host.appendChild(panel);
+  return host;
 }
 
 async function loadLabels() {
   const data = await apiJson('/api/labels');
   state.labels = data.labels || [];
   state.birads = data.birads || [];
+
+  // Toolbar keeps the classic single <select> (one label for the next new
+  // annotation). Multiple labels are added per-annotation in the right panel.
   const sel = $('labelSelect');
   sel.innerHTML = '';
   for (const l of state.labels) {
@@ -729,6 +1034,7 @@ async function loadLabels() {
     o.style.color = l.color;
     sel.appendChild(o);
   }
+
   const bsel = $('biradsSelect');
   for (const b of state.birads) {
     const o = document.createElement('option');
@@ -796,6 +1102,7 @@ function renderFileList(ul, items) {
     name.className = 'name';
     name.textContent = it.label;
     if (it.annoCount && it.annoCount > 0) {
+      name.classList.add('has-anno');
       const pill = document.createElement('span');
       pill.className = 'anno-pill';
       pill.textContent = it.annoCount;
@@ -862,7 +1169,8 @@ document.addEventListener('click', async (e) => {
     const r = await apiJson('/api/inference/batch', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ items, model, conf: state.aiThreshold || 0.25, auto_save: true }),
+      body: JSON.stringify({ items, model, conf: state.aiThreshold || 0.25, auto_save: true,
+                              tta: !!($('aiTtaToggle') && $('aiTtaToggle').checked) }),
     });
     const ok = r.results.filter(x => x.ok).length;
     const det = r.results.reduce((s, x) => s + (x.detections || 0), 0);
@@ -884,6 +1192,11 @@ async function onItemClick(it, li) {
 }
 
 async function openItem(it) {
+  // Safety net: persist unsaved work before leaving the current image so
+  // manual-save mode never silently loses annotations on navigation.
+  if (state.dirty && state.current) {
+    try { await saveAnnotations(); } catch (e) { /* keep navigating */ }
+  }
   setStatus("o'qilmoqda…");
   state.current = { kind: it.kind, id: it.id, path: it.path };
   state.frame = 0;
@@ -896,6 +1209,7 @@ async function openItem(it) {
   state.allSuggestions = [];
   $('aiClearBtn').hidden = true;
   $('aiAcceptAllBtn').hidden = true;
+  renderDiagBox(null);  // oldingi rasmdan qolgan tashxisni tozalash
 
   let metaUrl;
   if (it.kind === 'upload') metaUrl = `/api/files/${encodeURIComponent(it.id)}/metadata`;
@@ -908,22 +1222,43 @@ async function openItem(it) {
   state.defaultWc = parseFirstNumber(meta.WindowCenter);
   state.defaultWw = parseFirstNumber(meta.WindowWidth);
   state.frames = parseInt(meta.NumberOfFrames || '1', 10) || 1;
+  // (B2) PixelSpacing — "0.07\\0.07" yoki "[0.07, 0.07]" formatda. Yo'q bo'lsa null.
+  state.spacing_mm = (function parseSpacing(s) {
+    if (s == null || s === '') return null;
+    const str = String(s).replace(/[\[\]]/g, '');
+    const parts = str.split(/[,\\ ]+/).map(parseFloat).filter(x => !isNaN(x) && x > 0);
+    return parts.length >= 2 ? [parts[0], parts[1]] : (parts.length === 1 ? [parts[0], parts[0]] : null);
+  })(meta.PixelSpacing || meta.ImagerPixelSpacing);
   applyDefaults();
   configureFrameSlider();
   configureWlSliders(meta);
 
   await loadAnnotations();
+  state.dirty = false;
+  setSaveStatus('', '');
+  updateSaveBtn();
   loadReport().catch(() => {});
   await loadImage(true);
   $('deidBtn').hidden = false;
   $('srBtn').hidden = false;
   $('segBtn').hidden = false;
+  $('maskPngBtn').hidden = false;
+  $('maskNiftiBtn').hidden = false;
+  $('radiomicsBtn').hidden = false;
+  $('riskBtn').hidden = false;
   $('cStoreBtn').hidden = false;
+  $('moreMenuBtn').hidden = false;
   $('tplSelect').hidden = false;
   $('tplSaveBtn').hidden = false;
   refreshTemplates().catch(() => {});
   wsConnect();
   setStatus('tayyor');
+  // (C1) Paket (study) ochilganda 4 proyeksiyani avtomatik 2×2 grid qilib ochish.
+  // _noStudyAuto — grid ichidan bitta proyeksiyani annotatsiya uchun ochganda
+  // qayta ochilib ketmasligi uchun.
+  if (state.current && state.current.kind === 'upload' && !it._noStudyAuto) {
+    openStudyView(true).catch(() => {});
+  }
 }
 
 const RECORD_SECTIONS = [
@@ -1346,7 +1681,32 @@ function normalizeAnn(a) {
   if (!out.id) out.id = uid();
   if (!out.bbox) out.bbox = [0, 0, 0, 0];
   if (typeof out.frame !== 'number') out.frame = 0;
+  // Multi-label support: `labels` is the source of truth, `label` stays as the
+  // primary (first) label for backward compatibility (color, export, stats).
+  if (Array.isArray(out.labels) && out.labels.length) {
+    out.label = out.labels[0];
+  } else {
+    out.labels = out.label ? [out.label] : [];
+  }
   return out;
+}
+
+// Read the primary + full label set for an annotation, tolerating old records.
+function annLabels(a) {
+  if (Array.isArray(a.labels) && a.labels.length) return a.labels;
+  return a.label ? [a.label] : [];
+}
+function annLabelText(a) {
+  const ls = annLabels(a);
+  return ls.length ? ls.join(' + ') : '—';
+}
+
+// Primary label chosen in the toolbar for a new annotation (always one).
+// Extra labels are added afterwards via the per-annotation editor.
+function pendingLabels() {
+  const sel = $('labelSelect');
+  const v = sel ? sel.value : '';
+  return v ? [v] : [state.labels[0]?.name || 'mass'];
 }
 
 function parseFirstNumber(v) {
@@ -1438,7 +1798,12 @@ function clearViewer() {
   $('deidBtn').hidden = true;
   $('srBtn').hidden = true;
   $('segBtn').hidden = true;
+  $('maskPngBtn').hidden = true;
+  $('maskNiftiBtn').hidden = true;
+  $('radiomicsBtn').hidden = true;
+  $('riskBtn').hidden = true;
   $('cStoreBtn').hidden = true;
+  $('moreMenuBtn').hidden = true;
   $('tplSelect').hidden = true;
   $('tplSaveBtn').hidden = true;
   renderSvg();
@@ -1451,16 +1816,14 @@ async function loadImage(fitAfter) {
   const token = ++_imgLoadToken;
   const url = imageUrl();
 
-  try {
-    const probe = await fetch(url, { method: 'HEAD' });
-    if (probe.status === 422 || (state.meta && (state.meta.Modality === 'SR' || (state.meta.Modality || '').toUpperCase() === 'SR'))) {
-      if (probe.status === 422 || state.meta?.Modality === 'SR') {
-        await renderSrView();
-        return;
-      }
-    }
-  } catch (e) {
-    // fall through to img-tag flow
+  // SR (matnli hisobot, piksel yo'q) — to'g'ridan-to'g'ri SR ko'rinishi.
+  // (Avval HEAD-probe ishlatilardi, lekin /image endpoint faqat GET — HEAD 404
+  //  bergani uchun har yuklashda keraksiz xato chiqardi. Endi Modality bo'yicha
+  //  tekshiramiz; aniqlanmagan no-pixel hollarini quyidagi img.onerror->GET->422
+  //  fallback ushlaydi.)
+  if (state.meta && (state.meta.Modality || '').toUpperCase() === 'SR') {
+    await renderSrView();
+    return;
   }
 
   const img = $('dicomImg');
@@ -1673,7 +2036,9 @@ function applyTransform() {
   });
 
   wrap.addEventListener('mousedown', (e) => {
-    if (state.tool === 'bbox' && e.target.id === 'annoSvg') return;
+    // Chizish/o'lchov asboblarida SVG ustidagi bosish pan boshlamasligi kerak —
+    // aks holda Ruler/Angle/Poly/Smart click'lari ishlamaydi.
+    if (e.target.id === 'annoSvg' && ['bbox', 'poly', 'ruler', 'angle', 'smart'].includes(state.tool)) return;
     if (e.button !== 0 && e.button !== 1) return;
     dragging = true; lastX = e.clientX; lastY = e.clientY;
     wrap.classList.add('dragging');
@@ -1760,17 +2125,25 @@ function uploadOne(file, onProgress) {
     };
 
     const queue = files.slice();
+    // (Background task) — AI'ni kutib turish uchun file_id'lar
+    const aiQueuedIds = [];
     const worker = async () => {
       while (queue.length) {
         const f = queue.shift();
         try {
-          await uploadOne(f, (loaded, _t) => {
+          const resp = await uploadOne(f, (loaded, _t) => {
             fileProgress.set(f, loaded);
             refreshStatus();
           });
           totalUploaded += f.size;
           fileProgress.delete(f);
           done++;
+          // Background AI ni eslaymiz
+          if (resp && resp.files) {
+            for (const fi of resp.files) {
+              if (fi.ai_inference && fi.ai_inference.queued && fi.id) aiQueuedIds.push(fi.id);
+            }
+          }
         } catch (e) {
           failed++;
           fileProgress.delete(f);
@@ -1791,6 +2164,43 @@ function uploadOne(file, onProgress) {
     const elapsed = ((performance.now() - t0) / 1000).toFixed(1);
     if (failed) setStatus(`✓ ${done}/${total} yuklandi · ${failed} xato (${elapsed}s)`);
     else setStatus(`✓ ${done} ta fayl yuklandi (${elapsed}s)`);
+
+    // (Background task) — AI fonda tugagani uchun annotation'larni tortish
+    if (aiQueuedIds.length > 0) {
+      setStatus(`✓ ${done} fayl · 🤖 AI fonda tahlil qilmoqda...`);
+      let polls = 0;
+      const POLL_INTERVAL_MS = 3000;
+      const MAX_POLLS = 25;  // ~75 sek
+      const poll = async () => {
+        polls++;
+        try {
+          await refreshUploads();
+          // Joriy fayl AI kutyaptmi?
+          if (state.current && state.current.kind === 'upload' && aiQueuedIds.includes(state.current.id)) {
+            await loadAnnotations();
+          }
+        } catch {}
+        // Hammasi tugadimi tekshirish
+        try {
+          const files = await apiJson('/api/files');
+          let stillQueued = 0;
+          for (const fid of aiQueuedIds) {
+            const f = (files.files || []).find(x => x.id === fid);
+            if (f && (f.annotation_count || 0) === 0) stillQueued++;
+          }
+          if (stillQueued === 0) {
+            setStatus(`✓ AI tahlil tugadi (${done} fayl)`);
+            return;
+          }
+          if (polls >= MAX_POLLS) {
+            setStatus(`⚠ AI hali tugamadi (${stillQueued} ta kutyapti) — qo'lda Refresh bosing`);
+            return;
+          }
+        } catch {}
+        setTimeout(poll, POLL_INTERVAL_MS);
+      };
+      setTimeout(poll, POLL_INTERVAL_MS);
+    }
   };
 
   dz.addEventListener('dragover', (e) => { e.preventDefault(); dz.classList.add('drag'); });
@@ -2360,6 +2770,23 @@ async function openStatsModal() {
   }
   body.appendChild(grid);
 
+  // (Yangi) Lokal DICOM papkasi statistikasi — alohida skanerlash, async
+  const localSec = document.createElement('div');
+  localSec.className = 'stats-section';
+  localSec.innerHTML = `<h3>📁 Lokal DICOM papkasi <button id="localDicomRefresh" style="float:right;font-size:11px;padding:2px 8px;background:var(--panel-2);border:1px solid var(--border);color:var(--text);border-radius:3px;cursor:pointer">↻ Skan</button></h3>
+    <div id="localDicomStats" style="font-size:13px;color:var(--muted)">yuklanmoqda…</div>`;
+  body.appendChild(localSec);
+  loadLocalDicomStats();
+  const refreshBtn = $('localDicomRefresh');
+  if (refreshBtn) refreshBtn.addEventListener('click', async () => {
+    refreshBtn.disabled = true;
+    refreshBtn.textContent = '⏳ Skanerlanmoqda...';
+    // Kesh-bypass uchun yangi parametr
+    await loadLocalDicomStats(true);
+    refreshBtn.disabled = false;
+    refreshBtn.textContent = '↻ Skan';
+  });
+
   if (s.review_seconds) {
     const sec = document.createElement('div');
     sec.className = 'stats-section';
@@ -2444,6 +2871,38 @@ $('mobileMetaBtn').addEventListener('click', () => toggleMobile('aside.meta-pane
 
 $('statsBtn').addEventListener('click', openStatsModal);
 $('statsCloseBtn').addEventListener('click', () => { $('statsModal').hidden = true; });
+
+async function loadLocalDicomStats(bypassCache) {
+  const div = $('localDicomStats');
+  if (!div) return;
+  div.innerHTML = '<span style="color:var(--muted)">Skanerlanmoqda — bir necha sek (katta papka bo\'lsa 10-30 sek)...</span>';
+  try {
+    const url = bypassCache ? '/api/stats/local_dicom?nocache=' + Date.now() : '/api/stats/local_dicom';
+    const j = await apiJson(url);
+    if (!j.enabled) {
+      div.innerHTML = `<div style="color:#eab308">⚠ ${j.message}</div>
+        <div style="font-size:11px;color:var(--muted);margin-top:4px">Server'da <code>LOCAL_DICOM_ROOT=&lt;yo'l&gt;</code> env-var o'rnating</div>`;
+      return;
+    }
+    const modList = (j.by_modality || []).map(m => `<span style="background:var(--panel-2);padding:2px 6px;border-radius:3px;margin-right:4px">${m.modality}: <strong>${m.count}</strong></span>`).join('');
+    const subList = (j.top_subdirs || []).slice(0, 10).map(d => `
+      <tr><td style="padding:2px 8px;font-family:monospace">${d.name}</td><td style="padding:2px 8px;text-align:right"><strong>${d.dicom_count}</strong></td></tr>
+    `).join('');
+    div.innerHTML = `
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px">
+        <div class="stats-card"><div class="lbl">DICOM fayllari</div><div class="num">${j.dicom_files.toLocaleString()}</div></div>
+        <div class="stats-card"><div class="lbl">Noyob bemorlar (PatientID)</div><div class="num">${j.unique_patients.toLocaleString()}</div></div>
+      </div>
+      <div style="font-size:12px;color:var(--muted);margin-bottom:6px">Papka: <code>${j.root}</code> · Skan: ${j.scan_duration_s} sek ${j.errors ? `· ${j.errors} xato` : ''}</div>
+      ${modList ? `<div style="margin-bottom:8px"><strong>Modality bo'yicha:</strong><br>${modList}</div>` : ''}
+      ${subList ? `<details><summary style="cursor:pointer">Top papkalar (${j.top_subdirs.length})</summary>
+        <table style="margin-top:4px;border-collapse:collapse;font-size:12px"><thead><tr style="background:var(--panel-2)"><th style="padding:2px 8px;text-align:left">Papka</th><th style="padding:2px 8px;text-align:right">DICOM</th></tr></thead><tbody>${subList}</tbody></table>
+      </details>` : ''}
+    `;
+  } catch (e) {
+    div.innerHTML = `<div style="color:#ef4444">Xato: ${e.message || e}</div>`;
+  }
+}
 
 // ===== PACS modal =====
 
@@ -3097,6 +3556,37 @@ async function downloadDicomExport(kind, suffix, label) {
 $('srBtn').addEventListener('click', () => downloadDicomExport('dicom-sr', 'sr', 'DICOM-SR'));
 $('segBtn').addEventListener('click', () => downloadDicomExport('dicom-seg', 'seg', 'DICOM-SEG'));
 
+async function downloadMaskExport(format, ext, label) {
+  if (!state.current) return;
+  const tok = getToken();
+  setStatus(`${label} yaratilmoqda…`);
+  const res = await fetch(
+    `/api/export/mask?source=${refSource()}&ref=${encodeURIComponent(refValue())}&format=${format}`,
+    { headers: { 'Authorization': `Bearer ${tok}` } },
+  );
+  if (!res.ok) {
+    if (res.status === 404) alert("Annotatsiyalar yo'q — avval annotatsiya qiling");
+    else if (res.status === 422) alert('Rasm o\'lchamlari noma\'lum — maska yaratib bo\'lmadi');
+    else alert(`${label} xato: ` + res.status);
+    setStatus('');
+    return;
+  }
+  const legend = res.headers.get('X-Mask-Legend');
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  const stem = (refValue() || 'anon').split('/').pop().replace(/\.dcm$/i, '');
+  a.download = `${stem}_${ext}`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+  setStatus(`${label} yuklab olindi${legend ? ' · legend: ' + legend : ''}`);
+}
+$('maskPngBtn').addEventListener('click', () => downloadMaskExport('png', 'mask.png', 'Mask PNG'));
+$('maskNiftiBtn').addEventListener('click', () => downloadMaskExport('nifti', 'mask.nii.gz', 'Mask NIfTI'));
+
 (function bindLinksUi() {
   const inp = $('linksSearch');
   let timer = null;
@@ -3194,7 +3684,7 @@ async function loadLocalDir(subdir) {
     $('crumb').textContent = subdir ? '/' + subdir : '/';
     const items = [];
     if (subdir) items.push({ kind: 'dir', label: '..', path: data.parent });
-    for (const d of data.dirs) items.push({ kind: 'dir', label: d.name, path: d.path });
+    for (const d of data.dirs) items.push({ kind: 'dir', label: d.name, path: d.path, annoCount: d.annotation_count || 0 });
     for (const f of data.files) items.push({
       kind: 'local', label: f.name, sub: humanSize(f.size),
       path: f.path, annoCount: f.annotation_count || 0,
@@ -3234,22 +3724,165 @@ $('frameSlider').addEventListener('input', (e) => {
   renderSvg();
 });
 
+// (B4) Mammografiya W/L presetlari — tezkor sozlash uchun
+const MAMMO_PRESETS = {
+  mass: { wc: 2000, ww: 4000, label: '🔵 Mass' },
+  calc: { wc: 600,  ww: 1200, label: '⚪ Calc' },
+  skin: { wc: 2500, ww: 5000, label: '🟡 Skin' },
+};
+const WL_CUSTOM_KEY = 'mamograf_wl_presets';
+
+function loadCustomWlPresets() {
+  try {
+    const j = localStorage.getItem(WL_CUSTOM_KEY);
+    return j ? JSON.parse(j) : {};
+  } catch { return {}; }
+}
+function saveCustomWlPresets(obj) {
+  try { localStorage.setItem(WL_CUSTOM_KEY, JSON.stringify(obj)); } catch {}
+}
+
+function refreshCustomPresetSelect() {
+  const sel = $('wlCustomSelect');
+  if (!sel) return;
+  const presets = loadCustomWlPresets();
+  const names = Object.keys(presets).sort();
+  sel.innerHTML = '<option value="">— maxsus —</option>';
+  for (const n of names) {
+    const opt = document.createElement('option');
+    opt.value = n;
+    opt.textContent = `${n} (${presets[n].wc}/${presets[n].ww})`;
+    sel.appendChild(opt);
+  }
+  if (names.length > 0) {
+    const opt = document.createElement('option');
+    opt.value = '__delete__';
+    opt.textContent = '— o\'chirish —';
+    sel.appendChild(opt);
+  }
+}
+
+function setActivePresetBtn(name) {
+  document.querySelectorAll('.wl-preset[data-preset]').forEach(b => {
+    b.classList.toggle('active', b.dataset.preset === name);
+  });
+  state.activeWlPreset = name || null;
+}
+
+function applyWl(wc, ww, presetName) {
+  state.wc = wc;
+  state.ww = ww;
+  $('wcInput').value = Math.round(wc);
+  $('wwInput').value = Math.round(ww);
+  $('wcSlider').value = clampRange($('wcSlider'), wc);
+  $('wwSlider').value = clampRange($('wwSlider'), ww);
+  setActivePresetBtn(presetName);
+  loadImage(false);
+}
+
+async function applyAutoWl() {
+  if (!state.current) return;
+  // 1) Histogramma (persentil) asosida — oyna taglari yo'q rasmlarda ham ishlaydi
+  try {
+    const r = await apiJson(
+      `/api/files/${state.current.id || ''}/auto_window?frame=${state.frame || 0}`
+    ).catch(() => null);
+    if (r && r.ww > 0) {
+      applyWl(parseFloat(r.wc), parseFloat(r.ww), 'auto');
+      setStatus(`Auto W/L (histogramma): WC=${Math.round(r.wc)}, WW=${Math.round(r.ww)}`);
+      return;
+    }
+  } catch {}
+  // 2) DICOM WindowCenter / WindowWidth tag'lari
+  try {
+    const md = await apiJson(`/api/files/${state.current.id || ''}/metadata`).catch(() => null);
+    const wc = md && (md.WindowCenter || md.window_center);
+    const ww = md && (md.WindowWidth || md.window_width);
+    if (wc != null && ww != null) {
+      const wcVal = Array.isArray(wc) ? wc[0] : wc;
+      const wwVal = Array.isArray(ww) ? ww[0] : ww;
+      applyWl(parseFloat(wcVal), parseFloat(wwVal), 'auto');
+      return;
+    }
+  } catch {}
+  // 3) DICOM default'i
+  if (state.defaultWc != null && state.defaultWw != null) {
+    applyWl(state.defaultWc, state.defaultWw, 'auto');
+  } else {
+    setStatus("Auto W/L: hisoblab bo'lmadi");
+  }
+}
+
+(function bindWlPresets() {
+  document.querySelectorAll('.wl-preset[data-preset]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const name = btn.dataset.preset;
+      if (name === 'auto') { applyAutoWl(); return; }
+      const p = MAMMO_PRESETS[name];
+      if (p) applyWl(p.wc, p.ww, name);
+    });
+  });
+  const sel = $('wlCustomSelect');
+  if (sel) {
+    sel.addEventListener('change', () => {
+      const v = sel.value;
+      if (!v) return;
+      if (v === '__delete__') {
+        const presets = loadCustomWlPresets();
+        const name = prompt('O\'chirish uchun preset nomi:\n' + Object.keys(presets).join(', '));
+        if (name && presets[name]) {
+          delete presets[name];
+          saveCustomWlPresets(presets);
+          refreshCustomPresetSelect();
+        }
+        sel.value = '';
+        return;
+      }
+      const p = loadCustomWlPresets()[v];
+      if (p) applyWl(p.wc, p.ww, null);
+      sel.value = '';
+    });
+  }
+  const saveBtn = $('wlSaveBtn');
+  if (saveBtn) {
+    saveBtn.addEventListener('click', () => {
+      if (state.wc == null || state.ww == null) {
+        alert('Avval WC va WW qiymatlarini sozlang'); return;
+      }
+      const name = prompt('Preset nomi (mas. "yuqori kontrast"):');
+      if (!name || !name.trim()) return;
+      const presets = loadCustomWlPresets();
+      presets[name.trim()] = { wc: Math.round(state.wc), ww: Math.round(state.ww) };
+      saveCustomWlPresets(presets);
+      refreshCustomPresetSelect();
+      setStatus(`Preset "${name}" saqlandi (WC=${Math.round(state.wc)}, WW=${Math.round(state.ww)})`);
+    });
+  }
+  refreshCustomPresetSelect();
+})();
+
 // W/L bindings
 (function bindWl() {
   $('wcSlider').addEventListener('input', (e) => {
-    state.wc = parseFloat(e.target.value); $('wcInput').value = e.target.value; scheduleReload();
+    state.wc = parseFloat(e.target.value); $('wcInput').value = e.target.value;
+    setActivePresetBtn(null);
+    scheduleReload();
   });
   $('wwSlider').addEventListener('input', (e) => {
-    state.ww = parseFloat(e.target.value); $('wwInput').value = e.target.value; scheduleReload();
+    state.ww = parseFloat(e.target.value); $('wwInput').value = e.target.value;
+    setActivePresetBtn(null);
+    scheduleReload();
   });
   $('wcInput').addEventListener('change', (e) => {
     state.wc = parseFloat(e.target.value);
     $('wcSlider').value = clampRange($('wcSlider'), state.wc);
+    setActivePresetBtn(null);
     scheduleReload();
   });
   $('wwInput').addEventListener('change', (e) => {
     state.ww = parseFloat(e.target.value);
     $('wwSlider').value = clampRange($('wwSlider'), state.ww);
+    setActivePresetBtn(null);
     scheduleReload();
   });
 })();
@@ -3262,18 +3895,27 @@ window.addEventListener('resize', () => {
 
 function setTool(t) {
   if (state.tool === 'poly' && t !== 'poly') cancelPolyDraw();
+  if ((state.tool === 'ruler' || state.tool === 'angle') && t !== state.tool) cancelMeasureDraw();
   state.tool = t;
   $('toolSelect').classList.toggle('active', t === 'select');
   $('toolBbox').classList.toggle('active', t === 'bbox');
   $('toolPoly').classList.toggle('active', t === 'poly');
+  const tr = $('toolRuler'); if (tr) tr.classList.toggle('active', t === 'ruler');
+  const ta = $('toolAngle'); if (ta) ta.classList.toggle('active', t === 'angle');
+  const ts = $('toolSmartClick'); if (ts) ts.classList.toggle('active', t === 'smart');
   const stack = $('imgStack');
   stack.classList.toggle('drawing', t === 'bbox');
   stack.classList.toggle('drawing-poly', t === 'poly');
-  $('canvasWrap').classList.toggle('drawing', t === 'bbox' || t === 'poly');
+  stack.classList.toggle('drawing-measure', t === 'ruler' || t === 'angle');
+  stack.classList.toggle('drawing-smart', t === 'smart');
+  $('canvasWrap').classList.toggle('drawing', ['bbox', 'poly', 'ruler', 'angle', 'smart'].includes(t));
 }
 $('toolSelect').addEventListener('click', () => setTool('select'));
 $('toolBbox').addEventListener('click', () => setTool('bbox'));
 $('toolPoly').addEventListener('click', () => setTool('poly'));
+{ const b = $('toolRuler'); if (b) b.addEventListener('click', () => setTool('ruler')); }
+{ const b = $('toolAngle'); if (b) b.addEventListener('click', () => setTool('angle')); }
+{ const b = $('toolSmartClick'); if (b) b.addEventListener('click', () => setTool('smart')); }
 
 function svgViewSize() {
   const svg = $('annoSvg');
@@ -3297,6 +3939,132 @@ function svgPointNorm(e) {
 // Polygon drawing
 const polyDraw = { points: [], cursor: null };
 
+// (B2) Ruler/Angle drawing state — sodda nuqtalar to'plami + kursor
+const measureDraw = { points: [], cursor: null };
+function cancelMeasureDraw() {
+  measureDraw.points = [];
+  measureDraw.cursor = null;
+  renderSvg();
+}
+function onMeasureSvgClick(e) {
+  if (state.tool !== 'ruler' && state.tool !== 'angle') return;
+  e.preventDefault(); e.stopPropagation();
+  const p = svgPointNorm(e);
+  measureDraw.points.push([p.x, p.y]);
+  const need = state.tool === 'angle' ? 3 : 2;
+  if (measureDraw.points.length >= need) {
+    finalizeMeasureDraw();
+  } else {
+    renderSvg();
+  }
+}
+
+// (A4) Smart-click — bir bosish bilan polygon
+async function onSmartClick(e) {
+  if (state.tool !== 'smart') return;
+  if (!state.current) return;
+  e.preventDefault(); e.stopPropagation();
+  const p = svgPointNorm(e);
+  const px = clamp01(p.x), py = clamp01(p.y);
+  const source = refSource(); const ref = refValue();
+  if (!source || !ref) return;
+
+  setStatus('✨ Smart-click ishlamoqda...');
+  try {
+    const body = {
+      source, ref, frame: state.frame || 0,
+      x: px, y: py,
+      wc: state.wc, ww: state.ww,
+      tolerance: state.smartTolerance || 25,
+    };
+    const res = await api('/api/inference/smart_click', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) {
+      const err = await res.text();
+      throw new Error(err.replace(/^.*"detail":"?([^"}]+).*$/, '$1') || `HTTP ${res.status}`);
+    }
+    const data = await res.json();
+    const pts = data.points || [];
+    if (pts.length < 3) throw new Error('Polygon yetarli emas');
+    const id = uid();
+    const now = new Date().toISOString();
+    const sel = $('labelSelect');
+    const label = sel && sel.value || 'mass';
+    state.annotations.push({
+      id, type: 'polygon', label,
+      bi_rads: '', note: `Smart-click (${data.n_vertices} nuqta, ${data.area_pct}%)`,
+      points: pts.map(([x, y]) => [clamp01(x), clamp01(y)]),
+      frame: state.frame || 0,
+      created_at: now, updated_at: now,
+      created_by: (state._user && state._user.username) || '',
+      status: 'submitted',
+    });
+    state.selectedId = id;
+    renderSvg(); renderAnnoList();
+    scheduleAutosave();
+    setStatus(`✨ Polygon yaratildi (${data.n_vertices} nuqta)`);
+  } catch (err) {
+    setStatus(`Smart-click xato: ${err.message || err}`);
+  }
+}
+function onMeasureSvgMove(e) {
+  if (state.tool !== 'ruler' && state.tool !== 'angle') return;
+  if (measureDraw.points.length === 0) return;
+  const p = svgPointNorm(e);
+  measureDraw.cursor = [p.x, p.y];
+  renderSvg();
+}
+function finalizeMeasureDraw() {
+  if (measureDraw.points.length === 0) return;
+  const pts = measureDraw.points.map(p => [clamp01(p[0]), clamp01(p[1])]);
+  const type = state.tool === 'angle' ? 'angle' : 'ruler';
+  const id = uid();
+  const now = new Date().toISOString();
+  state.annotations.push({
+    id, type,
+    label: type,
+    points: pts,
+    frame: state.frame,
+    created_at: now,
+    updated_at: now,
+    created_by: state._user && state._user.username || '',
+    status: 'submitted',
+  });
+  measureDraw.points = []; measureDraw.cursor = null;
+  state.selectedId = id;
+  renderSvg(); renderAnnoList();
+  scheduleAutosave();
+}
+// O'lchov hisoblash — natural rasm pikselida × spacing_mm
+function computeDistanceMm(p1, p2) {
+  if (!state.spacing_mm) return null;
+  const img = $('dicomImg');
+  const W = img && img.naturalWidth || 1;
+  const H = img && img.naturalHeight || 1;
+  const dx_px = (p1[0] - p2[0]) * W;  // col
+  const dy_px = (p1[1] - p2[1]) * H;  // row
+  const dx_mm = dx_px * state.spacing_mm[1];  // col_spacing
+  const dy_mm = dy_px * state.spacing_mm[0];  // row_spacing
+  return Math.sqrt(dx_mm * dx_mm + dy_mm * dy_mm);
+}
+function computeAngleDeg(p1, vertex, p3) {
+  // p1 -> vertex va p3 -> vertex orasidagi burchak
+  const img = $('dicomImg');
+  const W = img && img.naturalWidth || 1;
+  const H = img && img.naturalHeight || 1;
+  const v1x = (p1[0] - vertex[0]) * W, v1y = (p1[1] - vertex[1]) * H;
+  const v3x = (p3[0] - vertex[0]) * W, v3y = (p3[1] - vertex[1]) * H;
+  const dot = v1x * v3x + v1y * v3y;
+  const mag1 = Math.sqrt(v1x * v1x + v1y * v1y);
+  const mag3 = Math.sqrt(v3x * v3x + v3y * v3y);
+  if (mag1 === 0 || mag3 === 0) return 0;
+  const cos = Math.max(-1, Math.min(1, dot / (mag1 * mag3)));
+  return Math.acos(cos) * 180 / Math.PI;
+}
+
 function cancelPolyDraw() {
   polyDraw.points = [];
   polyDraw.cursor = null;
@@ -3308,7 +4076,8 @@ function finalizePolyDraw() {
     cancelPolyDraw();
     return;
   }
-  const label = $('labelSelect').value || (state.labels[0]?.name || 'mass');
+  const labels = pendingLabels();
+  const label = labels[0];
   const birads = $('biradsSelect').value || '';
   const pts = polyDraw.points.map(p => [clamp01(p[0]), clamp01(p[1])]);
   const xs = pts.map(p => p[0]);
@@ -3319,6 +4088,7 @@ function finalizePolyDraw() {
     id: uid(),
     type: 'polygon',
     label,
+    labels,
     bi_rads: birads,
     note: '',
     frame: state.frame,
@@ -3364,7 +4134,10 @@ function onPolyDblClick(e) {
 (() => {
   const svg = $('annoSvg');
   svg.addEventListener('click', onPolySvgClick);
+  svg.addEventListener('click', onMeasureSvgClick);   // (B2) Ruler/Angle
+  svg.addEventListener('click', onSmartClick);        // (A4) Smart-click
   svg.addEventListener('mousemove', onPolySvgMove);
+  svg.addEventListener('mousemove', onMeasureSvgMove); // (B2) Ruler/Angle preview
   svg.addEventListener('dblclick', onPolyDblClick);
 
   svg.addEventListener('mousedown', (e) => {
@@ -3407,12 +4180,14 @@ function onPolyDblClick(e) {
 })();
 
 function addBox(x, y, w, h) {
-  const label = $('labelSelect').value || (state.labels[0] && state.labels[0].name) || 'unlabeled';
+  const labels = pendingLabels();
+  const label = labels[0];
   const birads = $('biradsSelect').value || '';
   const ann = {
     id: uid(),
     type: 'bbox',
     label,
+    labels,
     bi_rads: birads,
     note: '',
     frame: state.frame,
@@ -3439,12 +4214,13 @@ function deleteAnn(id) {
   scheduleAutosave();
 }
 
-function updateAnn(id, patch) {
+function updateAnn(id, patch, opts = {}) {
   const a = state.annotations.find(x => x.id === id);
   if (!a) return;
   Object.assign(a, patch);
   a.updated_at = new Date().toISOString();
-  renderSvg(); renderAnnoList();
+  renderSvg();
+  if (!opts.skipList) renderAnnoList();
   scheduleAutosave();
 }
 
@@ -3458,15 +4234,56 @@ function renderSvg() {
   let selectedAnn = null;
   for (const a of state.annotations) {
     if (a.frame !== state.frame) continue;
-    const color = colorFor(a.label);
+    const color = colorForAnn(a);
+    const zoneCls = aiZoneClass(a);
     const isSel = a.id === state.selectedId;
     if (isSel) selectedAnn = a;
 
     let labelX, labelY;
-    if (a.type === 'polygon' && a.points && a.points.length >= 3) {
+    if ((a.type === 'ruler' || a.type === 'angle') && a.points && a.points.length >= 2) {
+      // (B2) Ruler / Angle — line(s) + nuqtalar + matn (mm yoki gradus)
+      const isAngle = a.type === 'angle' && a.points.length >= 3;
+      const segs = isAngle ? [[a.points[0], a.points[1]], [a.points[1], a.points[2]]]
+                            : [[a.points[0], a.points[1]]];
+      for (const [p1, p2] of segs) {
+        const line = el('line', {
+          class: 'measure-line' + (isSel ? ' selected' : ''),
+          x1: p1[0] * VW, y1: p1[1] * VH,
+          x2: p2[0] * VW, y2: p2[1] * VH,
+          stroke: color, fill: 'none',
+        });
+        line.dataset.id = a.id;
+        svg.appendChild(line);
+      }
+      for (const p of a.points) {
+        const r = Math.max(2.5, fontSize * 0.18);
+        const dot = el('circle', { class: 'measure-dot', cx: p[0] * VW, cy: p[1] * VH, r, fill: color, stroke: '#fff' });
+        dot.dataset.id = a.id;
+        svg.appendChild(dot);
+      }
+      // O'lchov matni
+      let measureText = '';
+      if (isAngle) {
+        const deg = computeAngleDeg(a.points[0], a.points[1], a.points[2]);
+        measureText = `${deg.toFixed(1)}°`;
+      } else {
+        const mm = computeDistanceMm(a.points[0], a.points[1]);
+        measureText = mm == null ? `${((Math.hypot((a.points[1][0]-a.points[0][0])*VW, (a.points[1][1]-a.points[0][1])*VH))).toFixed(0)} px (spacing yo'q)` : (mm >= 10 ? `${(mm/10).toFixed(2)} cm` : `${mm.toFixed(1)} mm`);
+      }
+      const mid = isAngle ? a.points[1] : [(a.points[0][0]+a.points[1][0])/2, (a.points[0][1]+a.points[1][1])/2];
+      labelX = mid[0] * VW;
+      labelY = mid[1] * VH - fontSize * 0.6;
+      // matn fonini chizamiz
+      const bg = el('rect', { class: 'measure-bg', x: labelX - fontSize*0.5, y: labelY - fontSize*1.1, width: measureText.length * fontSize * 0.6, height: fontSize * 1.3, fill: 'rgba(0,0,0,0.65)', rx: 3, ry: 3 });
+      svg.appendChild(bg);
+      const txt = el('text', { class: 'measure-text', x: labelX, y: labelY - fontSize*0.1, 'font-size': fontSize, fill: '#ffd24d' });
+      txt.textContent = measureText;
+      svg.appendChild(txt);
+      continue; // standart "label" matnini chizmaslik
+    } else if (a.type === 'polygon' && a.points && a.points.length >= 3) {
       const ptsAttr = a.points.map(p => `${p[0] * VW},${p[1] * VH}`).join(' ');
       const poly = el('polygon', {
-        class: 'poly' + (isSel ? ' selected' : ''),
+        class: 'poly' + zoneCls + (isSel ? ' selected' : ''),
         points: ptsAttr,
         stroke: color,
         fill: color,
@@ -3479,7 +4296,7 @@ function renderSvg() {
     } else {
       const [bx, by, bw, bh] = a.bbox;
       const rect = el('rect', {
-        class: 'box' + (isSel ? ' selected' : ''),
+        class: 'box' + zoneCls + (isSel ? ' selected' : ''),
         x: bx * VW, y: by * VH, width: bw * VW, height: bh * VH,
         stroke: color,
         fill: color,
@@ -3496,15 +4313,33 @@ function renderSvg() {
       x: labelX, y: labelY,
       'font-size': fontSize,
     });
-    txt.textContent = a.label + (a.bi_rads ? ` · BI-RADS ${a.bi_rads}` : '');
+    txt.textContent = annLabelText(a) + (a.bi_rads ? ` · BI-RADS ${a.bi_rads}` : '');
     svg.appendChild(txt);
   }
 
   if (selectedAnn && state.tool !== 'bbox' && state.tool !== 'poly') {
     if (selectedAnn.type === 'polygon') {
       renderPolygonHandles(selectedAnn);
-    } else {
+    } else if (Array.isArray(selectedAnn.bbox)) {
       renderHandles(selectedAnn);
+    }
+    // ruler/angle: bbox yo'q — tahrirlash tutqichlari qo'llanmaydi (o'chirib qayta chizish mumkin)
+  }
+
+  // (B2) Ruler/Angle in-progress preview
+  if ((state.tool === 'ruler' || state.tool === 'angle') && measureDraw.points.length > 0) {
+    const pts = measureDraw.cursor ? [...measureDraw.points, measureDraw.cursor] : measureDraw.points;
+    for (let i = 1; i < pts.length; i++) {
+      const line = el('line', {
+        class: 'measure-preview',
+        x1: pts[i-1][0] * VW, y1: pts[i-1][1] * VH,
+        x2: pts[i][0] * VW,   y2: pts[i][1] * VH,
+      });
+      svg.appendChild(line);
+    }
+    for (const p of measureDraw.points) {
+      const c = el('circle', { class: 'measure-dot', cx: p[0] * VW, cy: p[1] * VH, r: 3 / Math.max(state.scale, 0.05), fill: '#ffd24d', stroke: '#fff' });
+      svg.appendChild(c);
     }
   }
 
@@ -3556,6 +4391,7 @@ const HANDLE_CURSORS = {
 };
 
 function renderHandles(ann) {
+  if (!Array.isArray(ann.bbox)) return;  // bbox yo'q (ruler/angle) — tutqich chizilmaydi
   const svg = $('annoSvg');
   const { w: VW, h: VH } = svgViewSize();
   const [bx, by, bw, bh] = ann.bbox;
@@ -3844,15 +4680,19 @@ function renderAnnoList() {
     const info = document.createElement('div');
     info.className = 'info';
 
-    const labelSel = document.createElement('select');
-    for (const l of state.labels) {
-      const o = document.createElement('option');
-      o.value = l.name; o.textContent = l.name;
-      if (l.name === a.label) o.selected = true;
-      labelSel.appendChild(o);
-    }
+    const labelSel = buildLabelMultiSelect({
+      selected: annLabels(a),
+      compact: true,
+      placeholder: 'Label',
+      onChange: (arr) => {
+        const labels = arr.length ? arr : [];
+        // skipList: keep the dropdown open so several labels can be toggled in a row;
+        // refresh the swatch + canvas in place instead of rebuilding the whole list.
+        updateAnn(a.id, { labels, label: labels[0] || '' }, { skipList: true });
+        sw.style.background = colorFor(labels[0]);
+      },
+    });
     labelSel.addEventListener('click', e => e.stopPropagation());
-    labelSel.addEventListener('change', e => updateAnn(a.id, { label: e.target.value }));
 
     const biSel = document.createElement('select');
     const empty = document.createElement('option');
@@ -3881,9 +4721,10 @@ function renderAnnoList() {
     const audit = document.createElement('div');
     audit.className = 'audit';
     const created = a.created_by ? `${a.created_by}` : '—';
+    const aiMark = a.ai_source ? ' · 🤖 AI batch (izoh)' : '';
     const updated = a.updated_by && a.updated_by !== a.created_by ? ` · oxirgi: ${a.updated_by}` : '';
     const reviewed = a.reviewed_by ? ` · ${status === 'approved' ? '✓' : '✗'} ${a.reviewed_by}` : '';
-    audit.textContent = `Yaratdi: ${created}${updated}${reviewed}`;
+    audit.textContent = `Yaratdi: ${created}${aiMark}${updated}${reviewed}`;
     info.appendChild(audit);
 
     if (a.review_note && status === 'rejected') {
@@ -3917,14 +4758,34 @@ function renderAnnoList() {
       }
     }
     sa.appendChild(makeStatusBtn('📜 Tarix', 'history', () => showHistoryFor(a.id)));
+    sa.appendChild(makeStatusBtn('📊 Radiomika', 'history', () => showRadiomicsFor(a.id)));
     info.appendChild(sa);
 
     const meta = document.createElement('div');
     meta.className = 'meta-row';
-    const [x, y, w, h] = a.bbox;
+    // bbox bo'lmagan annotatsiyalar (ruler/angle/smart-polygon) uchun nuqtalardan hisoblaymiz
+    let bb = a.bbox;
+    if (!Array.isArray(bb)) {
+      if (Array.isArray(a.points) && a.points.length) {
+        const xs = a.points.map(p => p[0]), ys = a.points.map(p => p[1]);
+        const mnx = Math.min(...xs), mny = Math.min(...ys);
+        bb = [mnx, mny, Math.max(...xs) - mnx, Math.max(...ys) - mny];
+      } else {
+        bb = [0, 0, 0, 0];
+      }
+    }
+    const [x, y, w, h] = bb;
     const W = state.meta && state.meta.Columns ? parseInt(state.meta.Columns, 10) : null;
     const H = state.meta && state.meta.Rows ? parseInt(state.meta.Rows, 10) : null;
-    const typeIcon = a.type === 'polygon' ? `⬢ ${a.points?.length || 0} nuqta · ` : '';
+    let typeIcon = '';
+    if (a.type === 'polygon') {
+      typeIcon = `⬢ ${a.points?.length || 0} nuqta · `;
+    } else if (a.type === 'ruler' && a.points && a.points.length >= 2) {
+      const mm = computeDistanceMm(a.points[0], a.points[1]);
+      typeIcon = mm != null ? `📏 ${mm.toFixed(1)} mm · ` : "📏 o'lchov · ";
+    } else if (a.type === 'angle' && a.points && a.points.length >= 3) {
+      typeIcon = `📐 ${computeAngleDeg(a.points[0], a.points[1], a.points[2]).toFixed(1)}° · `;
+    }
     if (W && H) {
       meta.textContent = `${typeIcon}(${Math.round(x * W)}, ${Math.round(y * H)}) — ${Math.round(w * W)}×${Math.round(h * H)} px`;
     } else {
@@ -3945,16 +4806,23 @@ function renderAnnoList() {
 }
 
 let _saveTimer = null;
+// Manual-save mode: drawing/editing only marks the work as unsaved.
+// The user persists explicitly via the 💾 Saqlash button (or Ctrl+S).
 function scheduleAutosave() {
   state.dirty = true;
-  setSaveStatus('dirty', '*');
-  clearTimeout(_saveTimer);
-  _saveTimer = setTimeout(saveAnnotations, 500);
+  setSaveStatus('dirty', '● saqlanmagan');
+  updateSaveBtn();
 }
 function setSaveStatus(cls, text) {
   const node = $('saveStatus');
   node.className = 'save-status ' + (cls || '');
   node.textContent = text || '';
+}
+function updateSaveBtn() {
+  const b = $('saveBtn');
+  if (!b) return;
+  b.disabled = !(state.dirty && state.current);
+  b.classList.toggle('pending', !!state.dirty);
 }
 
 function makeStatusBtn(text, cls, onClick) {
@@ -4084,6 +4952,247 @@ function annotationDiffSummary(prev, next) {
 }
 
 $('historyCloseBtn').addEventListener('click', () => { $('historyModal').hidden = true; });
+$('radiomicsCloseBtn').addEventListener('click', () => { $('radiomicsModal').hidden = true; });
+$('riskCloseBtn').addEventListener('click', () => { $('riskModal').hidden = true; });
+
+// Toolbar ochiluvchi menyulari (⤓ Eksport / 🛠 Ko'proq) — ixchamlik uchun
+(function bindToolbarMenus() {
+  function closeAll(except) {
+    document.querySelectorAll('.tb-menu-panel').forEach(p => {
+      if (p !== except) p.hidden = true;
+    });
+    document.querySelectorAll('.tb-menu-btn').forEach(b => b.classList.remove('open'));
+  }
+  document.querySelectorAll('.tb-menu-btn').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const panel = btn.nextElementSibling;
+      const willOpen = panel.hidden;
+      closeAll(willOpen ? panel : null);
+      panel.hidden = !willOpen;
+      btn.classList.toggle('open', willOpen);
+    });
+  });
+  // Menyu ichidagi tugma bosilsa — menyuni yopamiz (select esa ochiq qoladi)
+  document.querySelectorAll('.tb-menu-panel').forEach(panel => {
+    panel.addEventListener('click', (e) => {
+      if (e.target.closest('button')) closeAll();
+    });
+  });
+  // Tashqariga bosilsa — barchasini yopamiz
+  document.addEventListener('click', (e) => {
+    if (!e.target.closest('.tb-menu')) closeAll();
+  });
+})();
+
+// Toolbar: benign/malignant (xavf) tahlili — tanlangan massa ROI uchun
+$('riskBtn').addEventListener('click', () => {
+  const visible = state.annotations.filter(a => a.frame === state.frame);
+  if (!visible.length) {
+    alert("Bu kadrda annotatsiya yo'q. Avval massani BBox yoki Poly bilan belgilang.");
+    return;
+  }
+  let id = state.selectedId;
+  if (!id || !visible.some(a => a.id === id)) {
+    if (visible.length === 1) id = visible[0].id;
+    else { alert("Avval massani tanlang (ro'yxatdan yoki rasm ustida bosib)."); return; }
+  }
+  showMalignancyFor(id);
+});
+
+async function showMalignancyFor(annotationId) {
+  if (!state.current) return;
+  if (state.dirty) { try { await saveAnnotations(); } catch (e) { /* baribir urinib ko'ramiz */ } }
+  const body = $('riskBody');
+  body.innerHTML = '<div class="report-empty">Hisoblanmoqda…</div>';
+  $('riskModal').hidden = false;
+  try {
+    const res = await fetch(
+      `/api/radiomics/classify?source=${refSource()}&ref=${encodeURIComponent(refValue())}` +
+      `&annotation_id=${encodeURIComponent(annotationId)}`,
+      { headers: { 'Authorization': `Bearer ${getToken()}` } },
+    );
+    if (!res.ok) {
+      let detail = '';
+      try { detail = (await res.json()).detail || ''; } catch (e) {}
+      const hint = res.status === 409
+        ? "Klassifikator hali o'qitilmagan. Patologiya yorliqlari bilan o'qiting: scripts/train_radiomics_clf.py"
+        : res.status === 404 ? "Avval annotatsiyani saqlang."
+        : detail || `Xato ${res.status}`;
+      body.innerHTML = `<div class="report-empty">${hint}</div>`;
+      return;
+    }
+    renderMalignancy(body, await res.json());
+  } catch (e) {
+    body.innerHTML = `<div class="report-empty">Tarmoq xatosi: ${e.message}</div>`;
+  }
+}
+
+function renderMalignancy(body, d) {
+  const pMal = Math.round((d.p_malignant || 0) * 100);
+  const pBen = 100 - pMal;
+  const isMal = d.label === 'malignant';
+  const col = isMal ? '#ff4d4f' : '#28d97f';
+  // BI-RADS bilan solishtirish
+  const bi = (d.bi_rads || '').toUpperCase();
+  const biMal = ['4', '4A', '4B', '4C', '5', '6'].includes(bi);
+  let agree = '';
+  if (bi) {
+    const concord = (isMal && biMal) || (!isMal && !biMal);
+    agree = concord
+      ? `<div class="risk-note ok">✓ Radiomika va BI-RADS ${bi} mos keladi — ishonch yuqori</div>`
+      : `<div class="risk-note warn">⚠ Radiomika (${d.label_uz}) BI-RADS ${bi} bilan kelishmaydi — diqqat bilan ko'rib chiqing</div>`;
+  }
+  const auc = (d.cv_auc != null) ? `model AUC≈${d.cv_auc}` : '';
+  body.innerHTML = `
+    <div class="risk-head" style="color:${col}">
+      <span class="risk-verdict">${isMal ? '🔴' : '🟢'} ${d.label_uz}</span>
+      <span class="risk-conf">ishonch ${Math.round((d.confidence || 0) * 100)}%</span>
+    </div>
+    <div class="risk-bar">
+      <div class="risk-bar-mal" style="width:${pMal}%">${pMal > 12 ? pMal + '% xavfli' : ''}</div>
+      <div class="risk-bar-ben" style="width:${pBen}%">${pBen > 12 ? pBen + '% xavfsiz' : ''}</div>
+    </div>
+    <div class="risk-meta">
+      <span>Massa: <b>${d.lesion_label || '—'}</b></span>
+      <span>BI-RADS: <b>${bi || '—'}</b></span>
+      <span>${d.used_birads ? 'BI-RADS belgi sifatida ishlatildi' : 'faqat radiomika'}</span>
+      ${auc ? `<span>${auc}</span>` : ''}
+    </div>
+    ${agree}
+    <div class="risk-disclaimer">⚕ Bu — QAROR QO'LLAB-QUVVATLASH vositasi, tashxis emas.
+      Yakuniy qarorni radiolog patologiya va klinik ma'lumot asosida qabul qiladi.</div>
+  `;
+}
+
+// Toolbar button: radiomics for the selected annotation (or the only one).
+$('radiomicsBtn').addEventListener('click', () => {
+  const visible = state.annotations.filter(a => a.frame === state.frame);
+  if (!visible.length) {
+    alert("Bu kadrda annotatsiya yo'q. Avval BBox yoki Poly bilan ROI chizing.");
+    return;
+  }
+  let id = state.selectedId;
+  if (!id || !visible.some(a => a.id === id)) {
+    if (visible.length === 1) id = visible[0].id;
+    else { alert("Avval annotatsiyani tanlang (ro'yxatdan yoki rasm ustida bosib)."); return; }
+  }
+  showRadiomicsFor(id);
+});
+
+const RADIOMICS_FAMILIES = [
+  ['shape', 'Shakl (2D morfologiya)'],
+  ['first_order', 'First-order (intensivlik)'],
+  ['glcm', 'GLCM (tekstura — co-occurrence)'],
+  ['glrlm', 'GLRLM (run-length)'],
+  ['glszm', 'GLSZM (size-zone)'],
+  ['ngtdm', 'NGTDM (neighbouring tone)'],
+];
+
+function fmtFeature(v) {
+  if (typeof v !== 'number' || !isFinite(v)) return String(v);
+  if (v !== 0 && (Math.abs(v) >= 1e4 || Math.abs(v) < 1e-3)) return v.toExponential(3);
+  return v.toFixed(4);
+}
+
+async function showRadiomicsFor(annotationId, bins) {
+  if (!state.current) return;
+  // Radiomics runs on the saved copy; persist first in manual-save mode.
+  if (state.dirty) { try { await saveAnnotations(); } catch (e) { /* try anyway */ } }
+  bins = bins || 32;
+  const body = $('radiomicsBody');
+  body.innerHTML = '<div class="report-empty">Hisoblanmoqda…</div>';
+  $('radiomicsModal').hidden = false;
+  try {
+    const res = await fetch(
+      `/api/radiomics?source=${refSource()}&ref=${encodeURIComponent(refValue())}` +
+      `&annotation_id=${encodeURIComponent(annotationId)}&bins=${bins}`,
+      { headers: { 'Authorization': `Bearer ${getToken()}` } },
+    );
+    if (!res.ok) {
+      const hint = res.status === 404 ? " (avval annotatsiyani saqlang)" :
+                   res.status === 422 ? " (ROI yoki rasm o'lchami yaroqsiz)" : '';
+      body.innerHTML = `<div class="report-empty">Xato: ${res.status}${hint}</div>`;
+      return;
+    }
+    renderRadiomics(body, await res.json(), annotationId);
+  } catch (e) {
+    body.innerHTML = `<div class="report-empty">Tarmoq xatosi: ${e.message}</div>`;
+  }
+}
+
+function renderRadiomics(body, data, annotationId) {
+  const item = (data.results || [])[0];
+  body.innerHTML = '';
+  if (!item) { body.innerHTML = '<div class="report-empty">Natija yo\'q.</div>'; return; }
+
+  const ctl = document.createElement('div');
+  ctl.className = 'radiomics-controls';
+  const info = document.createElement('div');
+  info.className = 'radiomics-info';
+  const sp = item.spacing_mm ? `${item.spacing_mm.map(s => s.toFixed(3)).join('×')} mm/px`
+                              : "piksel o'lchami yo'q — birliklar px";
+  info.innerHTML = `Label: <b>${(item.labels || [item.label]).join(' + ')}</b> · ` +
+                   `tur: ${item.type} · ${sp} · bins: ${data.bins}`;
+  ctl.appendChild(info);
+
+  const binSel = document.createElement('select');
+  for (const b of [16, 32, 64, 128]) {
+    const o = document.createElement('option');
+    o.value = b; o.textContent = `${b} bins`;
+    if (b === data.bins) o.selected = true;
+    binSel.appendChild(o);
+  }
+  binSel.title = 'Tekstura uchun intensivlik darajalari soni';
+  binSel.addEventListener('change', () => showRadiomicsFor(annotationId, parseInt(binSel.value, 10)));
+  ctl.appendChild(binSel);
+
+  const csvBtn = document.createElement('button');
+  csvBtn.textContent = '⤓ CSV (barcha ROI)';
+  csvBtn.title = 'Shu rasmdagi barcha annotatsiyalar radiomikasini CSV qilib yuklash';
+  csvBtn.addEventListener('click', () => downloadRadiomicsCsv(data.bins));
+  ctl.appendChild(csvBtn);
+  body.appendChild(ctl);
+
+  for (const [fam, title] of RADIOMICS_FAMILIES) {
+    const feats = item.features[fam];
+    if (!feats) continue;
+    const h = document.createElement('div');
+    h.className = 'report-section-title';
+    h.textContent = `${title} · ${Object.keys(feats).length}`;
+    body.appendChild(h);
+    const tbl = document.createElement('table');
+    tbl.className = 'radiomics-table';
+    for (const [k, v] of Object.entries(feats)) {
+      const tr = document.createElement('tr');
+      const td1 = document.createElement('td'); td1.textContent = k;
+      const td2 = document.createElement('td'); td2.className = 'val'; td2.textContent = fmtFeature(v);
+      tr.appendChild(td1); tr.appendChild(td2);
+      tbl.appendChild(tr);
+    }
+    body.appendChild(tbl);
+  }
+}
+
+async function downloadRadiomicsCsv(bins) {
+  try {
+    const res = await fetch(
+      `/api/radiomics/csv?source=${refSource()}&ref=${encodeURIComponent(refValue())}&bins=${bins || 32}`,
+      { headers: { 'Authorization': `Bearer ${getToken()}` } },
+    );
+    if (!res.ok) { alert('CSV xato: ' + res.status); return; }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    const stem = (refValue() || 'anon').split('/').pop().replace(/\.dcm$/i, '');
+    a.download = `${stem}_radiomics.csv`;
+    document.body.appendChild(a); a.click(); a.remove();
+    URL.revokeObjectURL(url);
+  } catch (e) {
+    alert('CSV xato: ' + e.message);
+  }
+}
 
 async function saveAnnotations() {
   if (!state.current) return;
@@ -4107,13 +5216,76 @@ async function saveAnnotations() {
       body: JSON.stringify(body),
     });
     state.dirty = false;
-    setSaveStatus('saved', 'saqlandi');
+    setSaveStatus('saved', '✓ saqlandi');
+    updateSaveBtn();
     setTimeout(() => { if (!state.dirty) setSaveStatus('', ''); }, 1500);
     refreshActiveList();
   } catch (e) {
     setSaveStatus('err', 'xato!');
+    updateSaveBtn();
   } finally {
     state.saving = false;
+  }
+}
+
+// (A3) Uncertainty heatmap — barcha modellarni ishga tushirib, kelishmaslik
+// xaritasini DICOM ustiga overlay qiladi. Qayta bosish -> o'chiradi.
+async function toggleUncertaintyHeatmap() {
+  if (!state.current || !state.aiAvailable) return;
+  const btn = $('aiHeatmapBtn');
+  const ov = $('uncertaintyOverlay');
+  if (!btn || !ov) return;
+
+  // Allaqachon ko'rsatilgan bo'lsa — o'chir
+  if (btn.classList.contains('active')) {
+    btn.classList.remove('active');
+    ov.hidden = true;
+    if (ov.src && ov.src.startsWith('blob:')) URL.revokeObjectURL(ov.src);
+    ov.removeAttribute('src');
+    setStatus('Uncertainty heatmap o\'chirildi');
+    return;
+  }
+
+  const source = refSource();
+  const ref = refValue();
+  if (!source || !ref) return;
+
+  btn.disabled = true;
+  const prev = btn.textContent;
+  btn.textContent = '🌡 hisoblanmoqda…';
+  setStatus('Modellar ishga tushirilmoqda — bir necha sekund...');
+
+  try {
+    const conf = parseInt($('aiConfSlider').value, 10) / 100.0;
+    const res = await api('/api/inference/uncertainty', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        source, ref, model: '', frame: state.frame || 0,
+        conf, iou: 0.5, imgsz: 1024,
+      }),
+    });
+    if (!res.ok) {
+      const err = await res.text();
+      throw new Error(err || `HTTP ${res.status}`);
+    }
+    const blob = await res.blob();
+    const used = res.headers.get('X-Uncertainty-Models') || '';
+    const maxh = res.headers.get('X-Uncertainty-MaxHeat') || '?';
+    const pct = res.headers.get('X-Uncertainty-NonzeroPct') || '?';
+    const url = URL.createObjectURL(blob);
+    if (ov.src && ov.src.startsWith('blob:')) URL.revokeObjectURL(ov.src);
+    ov.src = url;
+    ov.hidden = false;
+    btn.classList.add('active');
+    const nmod = used.split(',').filter(Boolean).length;
+    setStatus(`Uncertainty: ${nmod} model · max=${maxh} · ${pct}% maydon`);
+  } catch (e) {
+    alert('Uncertainty xato: ' + (e.message || e));
+    setStatus('Uncertainty xato');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = prev;
   }
 }
 
@@ -4137,6 +5309,7 @@ async function runInference() {
       imgsz: 1024,
       wc: state.wc,
       ww: state.ww,
+      tta: !!($('aiTtaToggle') && $('aiTtaToggle').checked),
     };
     const res = await apiJson('/api/inference/run', {
       method: 'POST',
@@ -4189,6 +5362,7 @@ function acceptAllSuggestions() {
       id: uid(),
       type: 'bbox',
       label,
+      labels: [label],
       bi_rads: '',
       note: `AI: ${s.label} ${(s.confidence * 100).toFixed(1)}%`,
       frame: state.frame,
@@ -4223,6 +5397,7 @@ function onSuggestionClick(e, s) {
     id: uid(),
     type: 'bbox',
     label,
+    labels: [label],
     bi_rads: '',
     note: `AI: ${s.label} ${(s.confidence * 100).toFixed(1)}%`,
     frame: state.frame,
@@ -4240,6 +5415,692 @@ function onSuggestionClick(e, s) {
 }
 
 $('aiRunBtn').addEventListener('click', runInference);
+
+// 🩺 Tashxis — joriy rasm uchun klassifikatsiya (mas. benign/malignant)
+function renderDiagBox(res) {
+  const box = $('diagBox');
+  if (!box) return;
+  const ov = $('gmicOverlay');
+  if (!res) {
+    box.hidden = true; box.innerHTML = '';
+    if (ov) { ov.hidden = true; ov.removeAttribute('src'); }
+    return;
+  }
+  const probs = res.probs || {};
+  const top = res.top1_label || '';
+  const isMal = /malign/i.test(top);
+  // Ehtimollarni kamayish tartibida
+  const rows = Object.entries(probs).sort((a, b) => b[1] - a[1]).map(([k, v]) => {
+    const pct = (v * 100).toFixed(1);
+    const hot = k === top;
+    return `<div class="diag-row${hot ? ' hot' : ''}">
+      <span class="diag-k">${k}</span>
+      <span class="diag-bar"><i style="width:${pct}%"></i></span>
+      <span class="diag-v">${pct}%</span>
+    </div>`;
+  }).join('');
+  box.className = 'diag-box ' + (isMal ? 'mal' : 'ben');
+  box.hidden = false;
+  box.innerHTML = `
+    <div class="diag-head">🩺 Tashxis (qoralama)
+      <button class="diag-x" id="diagXBtn" title="Yopish">✕</button>
+    </div>
+    <div class="diag-top">${top.toUpperCase()} <small>${(res.top1_conf * 100).toFixed(0)}%</small></div>
+    ${rows}
+    ${res.saliency_png ? '<button class="diag-heat" id="diagHeatBtn" title="Malignant diqqat zonasi (saliency) — rasm ustida">🔥 Issiqlik xaritasi</button>' : ''}
+    <div class="diag-note">⚠️ AI taxmini — radiolog tasdig'i shart. Model: ${res.model}</div>`;
+  const x = $('diagXBtn');
+  if (x) x.addEventListener('click', () => renderDiagBox(null));
+  // Saliency overlay
+  if (ov) {
+    if (res.saliency_png) {
+      ov.src = res.saliency_png;
+      ov.hidden = false;
+      const hb = $('diagHeatBtn');
+      if (hb) {
+        hb.classList.add('on');
+        hb.addEventListener('click', () => {
+          ov.hidden = !ov.hidden;
+          hb.classList.toggle('on', !ov.hidden);
+        });
+      }
+    } else {
+      ov.hidden = true; ov.removeAttribute('src');
+    }
+  }
+}
+
+async function runDiagnosis() {
+  if (!state.current) { alert('Avval rasm oching.'); return; }
+  if (!state.gmic && !(state.clsModels && state.clsModels.length)) return;
+  const btn = $('diagBtn');
+  btn.disabled = true;
+  const prev = btn.textContent;
+  btn.textContent = '🩺 …';
+  setStatus('Tashxis hisoblanmoqda…');
+  try {
+    const res = await apiJson('/api/inference/classify', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        source: refSource(), ref: refValue(), frame: state.frame,
+        wc: state.wc, ww: state.ww,
+      }),
+    });
+    renderDiagBox(res);
+    setStatus(`Tashxis: ${res.top1_label} (${(res.top1_conf * 100).toFixed(0)}%)`);
+  } catch (e) {
+    alert('Tashxis xato: ' + (e.message || e));
+    setStatus('Tashxis xato');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = prev;
+  }
+}
+$('diagBtn').addEventListener('click', runDiagnosis);
+// (A3) Uncertainty heatmap tugmasi
+(function bindHeatmapBtn() {
+  const b = document.getElementById('aiHeatmapBtn');
+  if (b) b.addEventListener('click', toggleUncertaintyHeatmap);
+})();
+
+// (C1) Study hanging — paket ochilganda 4 proyeksiya avtomatik 2×2 grid,
+// chap tomonda real DICOM eskizlar (rail), bitta proyeksiya bosilsa jufti
+// bilan yonma-yon (teng ikki ustun) kattalashadi.
+// Grid joylashuvi (screenshot tartibi): RCC | LCC / RMLO | LMLO
+const FV_ORDER = ['RCC', 'LCC', 'RMLO', 'LMLO'];
+// Yonma-yon solishtiruv juftliklari: CC (RCC|LCC), MLO (RMLO|LMLO)
+const FV_PAIRS = {
+  RCC: ['RCC', 'LCC'], LCC: ['RCC', 'LCC'],
+  RMLO: ['RMLO', 'LMLO'], LMLO: ['RMLO', 'LMLO'],
+};
+state.studyView = state.studyView || {
+  active: false, study_uid: '', views: [], byKey: {}, mode: 'grid', activeKey: null,
+  _loadToken: 0,
+};
+
+// Rasmlarni KETMA-KET yuklash — server yukini kamaytirish uchun bir vaqtda
+// faqat bitta so'rov ketadi (oldingisi tugagach keyingisi boshlanadi).
+// Har renderda token oshadi — eski (bekor qilingan) navbat to'xtaydi.
+function _svLoadSequential(jobs) {
+  const token = ++state.studyView._loadToken;
+  let i = 0;
+  function next() {
+    if (token !== state.studyView._loadToken) return; // qayta render bo'ldi — to'xta
+    if (i >= jobs.length) return;
+    const { img, url } = jobs[i++];
+    const done = () => {
+      img.removeEventListener('load', done);
+      img.removeEventListener('error', done);
+      next();
+    };
+    img.addEventListener('load', done);
+    img.addEventListener('error', done);
+    img.src = url;
+  }
+  next();
+}
+
+function _svImgUrl(id, maxDim) {
+  // Har bir proyeksiya o'z standart W/L bilan (per-file) chiqadi
+  return `/api/files/${encodeURIComponent(id)}/image?frame=0&max_dim=${maxDim}`;
+}
+
+// Toolbar tugmasi — qo'lda ochish/yopish
+async function toggleFourView() {
+  if (state.studyView.active) { closeStudyView(); return; }
+  await openStudyView(false);
+}
+
+// Study ko'rinishini ochish. autoFromOpen=true bo'lsa, xatolarda jim qoladi
+// (openItem ichidan avtomatik chaqiriladi).
+async function openStudyView(autoFromOpen) {
+  const btn = $('fourViewBtn');
+  if (!state.current || state.current.kind !== 'upload') {
+    if (!autoFromOpen) alert('Study ko\'rinishi faqat yuklangan fayllar uchun.');
+    return false;
+  }
+  let data;
+  if (btn) btn.disabled = true;
+  try {
+    data = await apiJson(`/api/files/${state.current.id}/study_views`);
+  } catch (e) {
+    if (!autoFromOpen) alert('Study xato: ' + (e.message || e));
+    return false;
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+  const views = (data.views || []).filter(v => FV_ORDER.includes(v.key));
+  if (views.length < 2) {
+    if (state.studyView.active) closeStudyView();
+    if (!autoFromOpen) alert('Bu study uchun yetarli proyeksiya topilmadi (kamida 2 kerak).');
+    return false;
+  }
+  const sv = state.studyView;
+  const sameStudy = sv.active && sv.study_uid === (data.study_uid || '');
+  sv.study_uid = data.study_uid || '';
+  sv.views = views;
+  sv.byKey = {};
+  for (const v of views) sv.byKey[v.key] = v;
+  if (!sameStudy) { sv.mode = 'grid'; sv.activeKey = null; }
+  sv.active = true;
+  renderStudyView();
+  const grid = $('fourViewGrid');
+  const stack = $('imgStack');
+  if (stack) stack.hidden = true;
+  if (grid) grid.hidden = false;
+  if (btn) btn.classList.add('active');
+  setStatus(`Study: ${views.length} proyeksiya (${views.map(v => v.key).join(', ')})`);
+  return true;
+}
+
+function closeStudyView() {
+  const sv = state.studyView;
+  sv.active = false;
+  const grid = $('fourViewGrid');
+  const stack = $('imgStack');
+  const btn = $('fourViewBtn');
+  if (grid) { grid.hidden = true; grid.innerHTML = ''; }
+  if (stack) stack.hidden = false;
+  if (btn) btn.classList.remove('active');
+}
+
+function showPair(key) {
+  const sv = state.studyView;
+  if (!sv.byKey[key]) return;
+  sv.mode = 'pair';
+  sv.activeKey = key;
+  renderStudyView();
+}
+function showGrid() {
+  const sv = state.studyView;
+  sv.mode = 'grid';
+  sv.activeKey = null;
+  renderStudyView();
+}
+
+function _svCell(key, mode, jobs) {
+  const sv = state.studyView;
+  const v = sv.byKey[key];
+  const cell = document.createElement('div');
+  cell.className = 'sv-cell' + (v ? '' : ' empty');
+  const lbl = document.createElement('div');
+  lbl.className = 'fv-label';
+  lbl.textContent = 'FFDM ' + key;
+  cell.appendChild(lbl);
+  if (v) {
+    const img = document.createElement('img');
+    img.alt = key;
+    // Ketma-ket yuklash navbatiga qo'shamiz (src keyin o'rnatiladi)
+    jobs.push({ img, url: _svImgUrl(v.id, mode === 'pair' ? 1600 : 1024) });
+    cell.appendChild(img);
+    if (mode === 'grid') {
+      cell.title = `${key} — bosib kattalashtirish, ikki marta bosib annotatsiya`;
+      cell.addEventListener('click', () => showPair(key));
+    } else {
+      cell.title = `${key} — ikki marta bosib annotatsiya rejimida ochish`;
+    }
+    // Ikki marta bosish — shu proyeksiyani to'liq annotatsiya rejimida ochadi
+    cell.addEventListener('dblclick', () => {
+      closeStudyView();
+      openItem({ kind: 'upload', id: v.id, path: v.id, _noStudyAuto: true });
+    });
+  } else {
+    const t = document.createElement('div');
+    t.className = 'sv-empty-txt';
+    t.textContent = '(yo\'q)';
+    cell.appendChild(t);
+  }
+  return cell;
+}
+
+function renderStudyView() {
+  const grid = $('fourViewGrid');
+  if (!grid) return;
+  const sv = state.studyView;
+  grid.innerHTML = '';
+  // Ketma-ket yuklash navbati — asosiy kataklar avval, rail eskizlari keyin
+  const jobs = [];
+  const railJobs = [];
+
+  // Chap rail — real DICOM eskizlar (bosib kattalashtirish mumkin)
+  const rail = document.createElement('div');
+  rail.className = 'sv-rail';
+  const rTitle = document.createElement('div');
+  rTitle.className = 'sv-rail-title';
+  rTitle.textContent = '2D';
+  rail.appendChild(rTitle);
+  for (const key of FV_ORDER) {
+    const v = sv.byKey[key];
+    const th = document.createElement('div');
+    th.className = 'sv-thumb' + (v ? '' : ' empty') + (sv.activeKey === key ? ' active' : '');
+    th.dataset.key = key;
+    if (v) {
+      const img = document.createElement('img');
+      img.alt = key;
+      railJobs.push({ img, url: _svImgUrl(v.id, 220) });
+      th.appendChild(img);
+      th.title = `${key} — bosib kattalashtirish`;
+      th.addEventListener('click', () => showPair(key));
+    } else {
+      const x = document.createElement('span');
+      x.className = 'sv-thumb-x';
+      x.textContent = '—';
+      th.appendChild(x);
+    }
+    const cap = document.createElement('span');
+    cap.className = 'sv-thumb-cap';
+    cap.textContent = key;
+    th.appendChild(cap);
+    rail.appendChild(th);
+  }
+  grid.appendChild(rail);
+
+  // Asosiy maydon — grid yoki yonma-yon pair
+  const main = document.createElement('div');
+  main.className = 'sv-main';
+
+  const close = document.createElement('button');
+  close.className = 'fv-close';
+  close.textContent = '✕ Yopish';
+  close.addEventListener('click', closeStudyView);
+  main.appendChild(close);
+
+  if (sv.mode === 'pair') {
+    const back = document.createElement('button');
+    back.className = 'sv-back';
+    back.textContent = '⊞ Grid';
+    back.title = '2×2 grid ko\'rinishiga qaytish';
+    back.addEventListener('click', showGrid);
+    main.appendChild(back);
+  }
+
+  const stage = document.createElement('div');
+  stage.className = 'sv-stage ' + (sv.mode === 'pair' ? 'sv-stage-pair' : 'sv-stage-grid');
+  const keys = sv.mode === 'pair' ? (FV_PAIRS[sv.activeKey] || [sv.activeKey]) : FV_ORDER;
+  for (const key of keys) stage.appendChild(_svCell(key, sv.mode, jobs));
+  main.appendChild(stage);
+  grid.appendChild(main);
+
+  // Avval asosiy kataklar, keyin rail eskizlari — bittadan ketma-ket
+  _svLoadSequential(jobs.concat(railJobs));
+}
+
+(function bindFourView() {
+  const b = $('fourViewBtn');
+  if (b) b.addEventListener('click', toggleFourView);
+})();
+
+// Annotation bo'lgan fayllarni boshqa papkaga eksport
+function openExportAnnModal() {
+  const m = $('exportAnnModal');
+  if (!m) return;
+  m.hidden = false;
+  const res = $('expResult');
+  if (res) res.innerHTML = '';
+  const dest = $('expDest');
+  if (dest && !dest.value) {
+    const lastDest = localStorage.getItem('mamograf_last_export_dest');
+    if (lastDest) dest.value = lastDest;
+  }
+}
+function closeExportAnnModal() {
+  const m = $('exportAnnModal');
+  if (m) m.hidden = true;
+}
+async function submitExportAnn(ev) {
+  ev.preventDefault();
+  const dest = ($('expDest').value || '').trim();
+  if (!dest) { alert('Maqsad papkani kiriting'); return; }
+  const sourceRadio = document.querySelector('input[name="expSource"]:checked');
+  const source_kind = sourceRadio ? sourceRadio.value : 'upload';
+  const statusesRaw = ($('expStatuses').value || '').trim();
+  const statuses = statusesRaw ? statusesRaw.split(/[,\s]+/).filter(Boolean) : null;
+  const body = {
+    destination: dest,
+    source_kind,
+    require_annotations: $('expRequireAnn').checked,
+    require_human: $('expRequireHuman').checked,
+    statuses,
+    include_annotation_json: $('expIncludeJson').checked,
+    organize_by: $('expOrganize').value || 'flat',
+    overwrite: $('expOverwrite').checked,
+  };
+  const btn = $('expSubmitBtn');
+  const res = $('expResult');
+  btn.disabled = true;
+  const prev = btn.textContent;
+  btn.textContent = '📤 Bajarilmoqda...';
+  if (res) res.innerHTML = '<span style="color:var(--muted)">Fayllar qidirilmoqda...</span>';
+  try {
+    const r = await api('/api/export/annotated', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (!r.ok) {
+      const t = await r.text();
+      throw new Error(t.replace(/^.*"detail":"?([^"}]+).*$/, '$1') || `HTTP ${r.status}`);
+    }
+    const j = await r.json();
+    localStorage.setItem('mamograf_last_export_dest', dest);
+    const html = `
+      <div style="background:var(--panel-2);border-left:3px solid #22c55e;padding:8px 12px;border-radius:3px">
+        <strong>✓ Eksport tugadi</strong><br>
+        Manzil: <code>${j.destination}</code><br>
+        Ko'chirildi: <strong>${j.copied_count}</strong> ta fayl<br>
+        ${j.skipped_count > 0 ? `O'tkazib yuborildi: ${j.skipped_count} (mavjud yoki xato)<br>` : ''}
+        ${j.no_annotations_count > 0 ? `Annotation yo'q: ${j.no_annotations_count}<br>` : ''}
+      </div>
+      ${j.copied && j.copied.length > 0 ? `
+        <details style="margin-top:8px;font-size:12px">
+          <summary>Ko'chirilgan fayllar (${j.copied.length})</summary>
+          <ul style="max-height:160px;overflow:auto;font-family:monospace;padding-left:20px">
+            ${j.copied.slice(0, 100).map(c => `<li>${c.id} → ${c.annotations} ann ${c.annotation_json ? '· json' : ''}</li>`).join('')}
+          </ul>
+        </details>` : ''
+      }
+    `;
+    if (res) res.innerHTML = html;
+  } catch (e) {
+    if (res) res.innerHTML = `<span style="color:#ef4444">Xato: ${e.message || e}</span>`;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = prev;
+  }
+}
+(function bindExportAnn() {
+  const b = $('exportAnnBtn');
+  if (b) b.addEventListener('click', openExportAnnModal);
+  const close = $('expCloseBtn');
+  if (close) close.addEventListener('click', closeExportAnnModal);
+  const form = $('exportAnnForm');
+  if (form) form.addEventListener('submit', submitExportAnn);
+})();
+
+// Training dataset tayyorlash modali
+function openTrainPrepModal() {
+  const m = $('trainPrepModal');
+  if (!m) return;
+  m.hidden = false;
+  const last = localStorage.getItem('mamograf_last_train_dest');
+  if (last && $('tpDest') && !$('tpDest').value) $('tpDest').value = last;
+  const res = $('tpResult');
+  if (res) res.innerHTML = '';
+}
+function closeTrainPrepModal() {
+  const m = $('trainPrepModal');
+  if (m) m.hidden = true;
+}
+async function submitTrainPrep(ev) {
+  ev.preventDefault();
+  const dest = ($('tpDest').value || '').trim();
+  if (!dest) { alert('Maqsad papka kiriting'); return; }
+  const statusesRaw = ($('tpStatuses').value || '').trim();
+  const statuses = statusesRaw ? statusesRaw.split(/[,\s]+/).filter(Boolean) : null;
+  const classRaw = ($('tpClasses').value || '').trim();
+  const class_list = classRaw ? classRaw.split(/[,\s]+/).filter(Boolean) : null;
+  const body = {
+    destination: dest,
+    target_size: parseInt($('tpSize').value, 10) || 1024,
+    val_frac: parseFloat($('tpValFrac').value) || 0.15,
+    image_format: $('tpFormat').value || 'png',
+    include_ai: $('tpIncludeAi').checked,
+    statuses,
+    class_list,
+    seed: parseInt($('tpSeed').value, 10) || 42,
+    zip_after: $('tpZip').checked,
+  };
+  const btn = $('tpSubmitBtn');
+  const res = $('tpResult');
+  btn.disabled = true;
+  const prev = btn.textContent;
+  btn.textContent = '🎓 Yaratilmoqda...';
+  if (res) res.innerHTML = '<span style="color:var(--muted)">Annotation\'lar qayta ishlanmoqda, DICOM render qilinmoqda — bir necha sek...</span>';
+  try {
+    const r = await api('/api/training/prepare', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (!r.ok) {
+      const t = await r.text();
+      throw new Error(t.replace(/^.*"detail":"?([^"}]+).*$/, '$1') || `HTTP ${r.status}`);
+    }
+    const j = await r.json();
+    localStorage.setItem('mamograf_last_train_dest', dest);
+    _lastDataYaml = j.data_yaml;
+    _lastDatasetName = (j.remote_dataset && !j.remote_dataset.error) ? j.dataset_name : null;
+    const tb = $('trRunBtn'); if (tb) tb.disabled = false;
+    const trs = $('trRunStatus'); if (trs) trs.textContent = `Tayyor: ${j.data_yaml}`;
+    // GPU serverga oldindan yuklash holati
+    let remoteHtml = '';
+    if (j.remote_dataset && !j.remote_dataset.error) {
+      const mb = (j.remote_dataset.bytes / 1048576).toFixed(1);
+      remoteHtml = `<div style="margin-top:6px;color:#22c55e">📡 GPU serverga yuklandi (10.10.0.72): <code>${j.dataset_name}</code> · ${mb} MB — <strong>▶ Train darhol boshlanadi</strong></div>`;
+    } else if (j.remote_dataset && j.remote_dataset.error) {
+      remoteHtml = `<div style="margin-top:6px;color:#f59e0b">⚠ GPU serverga oldindan yuklab bo'lmadi (${j.remote_dataset.error}) — ▶ Train paytida yuklanadi</div>`;
+    }
+    const html = `
+      <div style="background:var(--panel-2);border-left:3px solid #22c55e;padding:8px 12px;border-radius:3px">
+        <strong>✓ Training dataset tayyor</strong><br>
+        Manzil: <code>${j.destination}</code><br>
+        ${remoteHtml}
+        Klasslar (${j.classes.length}): <strong>${j.classes.join(', ')}</strong><br>
+        <table style="margin-top:6px;font-size:12px;border-collapse:collapse">
+          <tr><th style="text-align:left;padding:2px 8px">Split</th><th style="padding:2px 8px">Tasvirlar</th><th style="padding:2px 8px">Annotatsiyalar (label satrlari)</th></tr>
+          <tr><td style="padding:2px 8px">train</td><td style="padding:2px 8px"><strong>${j.train_imgs}</strong></td><td style="padding:2px 8px">${j.train_lbls}</td></tr>
+          <tr><td style="padding:2px 8px">val</td><td style="padding:2px 8px"><strong>${j.val_imgs}</strong></td><td style="padding:2px 8px">${j.val_lbls}</td></tr>
+        </table>
+        <div style="margin-top:6px">Patient-aware split: <strong>${j.val_groups}</strong>/<strong>${j.total_groups}</strong> guruh val'ga ketdi</div>
+        ${j.zip ? `<div style="margin-top:6px">ZIP: <code>${j.zip}</code></div>` : ''}
+        <div style="margin-top:8px;font-size:12px;color:var(--muted)">data.yaml: <code>${j.data_yaml}</code></div>
+      </div>
+      <details style="margin-top:8px;font-size:12px">
+        <summary>Endi qanday o'qitish kerak?</summary>
+        <pre style="background:var(--panel-2);padding:8px;border-radius:3px;overflow:auto">pip install ultralytics
+yolo task=detect mode=train model=yolo11n.pt \\
+    data=${j.data_yaml} \\
+    epochs=100 imgsz=${body.target_size} batch=8</pre>
+        <div>README_TRAIN.md ham qayd etilgan.</div>
+      </details>
+    `;
+    if (res) res.innerHTML = html;
+  } catch (e) {
+    if (res) res.innerHTML = `<span style="color:#ef4444">Xato: ${e.message || e}</span>`;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = prev;
+  }
+}
+(function bindTrainPrep() {
+  const b = $('trainPrepBtn');
+  if (b) b.addEventListener('click', openTrainPrepModal);
+  const close = $('tpCloseBtn');
+  if (close) close.addEventListener('click', closeTrainPrepModal);
+  const xclose = $('trainPrepXBtn');
+  if (xclose) xclose.addEventListener('click', closeTrainPrepModal);
+  const form = $('trainPrepForm');
+  if (form) form.addEventListener('submit', submitTrainPrep);
+})();
+
+// Server'da YOLO o'qitish — modal ichidagi tugma
+let _lastDataYaml = null;
+let _lastDatasetName = null;   // GPU'da oldindan yuklangan dataset nomi (tez-start)
+let _trainPollTimer = null;
+async function startServerTrain() {
+  if (!_lastDataYaml) { alert('Avval dataset yarating'); return; }
+  const btn = $('trRunBtn');
+  const status = $('trRunStatus');
+  const logView = $('trLogView');
+  btn.disabled = true;
+  status.textContent = 'Boshlanyapti...';
+  logView.style.display = 'block';
+  logView.textContent = '';
+  try {
+    const r = await api('/api/training/run', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        data_yaml: _lastDataYaml,
+        dataset_name: _lastDatasetName,   // GPU'da bo'lsa — qayta yuklanmaydi, darhol start
+        base_model: $('trBaseModel').value,
+        epochs: parseInt($('trEpochs').value, 10) || 50,
+        imgsz: parseInt($('tpSize').value, 10) || 1024,
+        batch: parseInt($('trBatch').value, 10) || 8,
+        deploy_after: $('trDeploy').checked,
+      }),
+    });
+    if (!r.ok) {
+      const t = await r.text();
+      throw new Error(t.replace(/^.*"detail":"?([^"}]+).*$/, '$1') || `HTTP ${r.status}`);
+    }
+    const j = await r.json();
+    status.textContent = `Run ID: ${j.run_id} · ${j.status}`;
+    // Polling
+    if (_trainPollTimer) clearInterval(_trainPollTimer);
+    _trainPollTimer = setInterval(() => pollTrainStatus(j.run_id), 3000);
+  } catch (e) {
+    status.textContent = 'Xato: ' + (e.message || e);
+    btn.disabled = false;
+  }
+}
+async function pollTrainStatus(runId) {
+  try {
+    const r = await api(`/api/training/status/${runId}?tail=80`);
+    if (!r.ok) return;
+    const j = await r.json();
+    const status = $('trRunStatus');
+    const logView = $('trLogView');
+    status.textContent = `Run ${runId} · ${j.status}` + (j.return_code != null ? ` (rc=${j.return_code})` : '');
+    if (j.log_tail && j.log_tail.length) {
+      logView.textContent = j.log_tail.join('\n');
+      logView.scrollTop = logView.scrollHeight;
+    }
+    if (j.status === 'done' || j.status === 'failed') {
+      clearInterval(_trainPollTimer); _trainPollTimer = null;
+      $('trRunBtn').disabled = false;
+      if (j.status === 'done' && j.model_deployed) {
+        status.textContent += ` · Deploy: ${j.model_deployed}`;
+      } else if (j.error) {
+        status.textContent += ` · ${j.error}`;
+      }
+    }
+  } catch {}
+}
+(function bindTrainRun() {
+  const b = $('trRunBtn');
+  if (b) b.addEventListener('click', startServerTrain);
+})();
+
+// Modellar dashboard
+async function openModelMgrModal() {
+  const m = $('modelMgrModal');
+  if (!m) return;
+  m.hidden = false;
+  await refreshModelsTable();
+  await refreshActiveLearningInModal();
+}
+function closeModelMgrModal() { const m = $('modelMgrModal'); if (m) m.hidden = true; }
+
+async function refreshActiveLearningInModal() {
+  const panel = $('alPanel');
+  if (!panel) return;
+  try {
+    const j = await apiJson('/api/training/suggestion');
+    const ok = j.should_retrain;
+    panel.style.background = ok ? 'rgba(34,197,94,0.15)' : 'var(--panel-2)';
+    panel.style.borderLeft = ok ? '3px solid #22c55e' : '3px solid var(--border)';
+    panel.innerHTML = `
+      <strong>${j.message}</strong><br>
+      Jami annotation: ${j.total_annotations}
+      · Qo'lda: ${j.human_annotations}
+      · Tahrirlangan AI: ${j.edited_ai}
+      · Tasdiqlangan AI: ${j.approved_ai}
+      <br><span style="color:var(--muted)">Chegara: ${j.threshold} (ACTIVE_LEARNING_THRESHOLD env)</span>
+    `;
+  } catch (e) {
+    panel.textContent = 'Active learning ma\'lumotini olib bo\'lmadi: ' + (e.message || e);
+  }
+}
+
+async function refreshModelsTable() {
+  const div = $('modelsTable');
+  if (!div) return;
+  div.innerHTML = '<span style="color:var(--muted)">yuklanmoqda…</span>';
+  try {
+    const j = await apiJson('/api/models/stats');
+    const rows = (j.models || []).map(m => `
+      <tr>
+        <td style="padding:4px 8px;font-family:monospace">${m.name}</td>
+        <td style="padding:4px 8px;text-align:right">${m.size_mb} MB</td>
+        <td style="padding:4px 8px;text-align:right"><strong>${m.annotations_produced}</strong></td>
+        <td style="padding:4px 8px;font-size:11px;color:var(--muted)">${m.added_at ? m.added_at.slice(0,19).replace('T',' ') : '—'}</td>
+        <td style="padding:4px 8px">${m.is_trained_locally ? '<span style="color:#22c55e">trained</span>' : '<span style="color:var(--muted)">built-in</span>'}</td>
+        <td style="padding:4px 8px">${m.is_deletable ? `<button data-mm-del="${m.name}" style="background:#ef4444;color:#fff;border:0;padding:3px 8px;border-radius:3px;cursor:pointer;font-size:11px">O'chirish</button>` : ''}</td>
+      </tr>
+    `).join('');
+    div.innerHTML = `
+      <table style="width:100%;border-collapse:collapse;border:1px solid var(--border)">
+        <thead><tr style="background:var(--panel-2)">
+          <th style="padding:4px 8px;text-align:left">Nom</th>
+          <th style="padding:4px 8px;text-align:right">Hajm</th>
+          <th style="padding:4px 8px;text-align:right">Annotation</th>
+          <th style="padding:4px 8px;text-align:left">Qo'shilgan</th>
+          <th style="padding:4px 8px;text-align:left">Tur</th>
+          <th></th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+      <div style="font-size:11px;color:var(--muted);margin-top:6px">Papka: ${j.models_dir}</div>
+    `;
+    // Delete tugmalariga ulanish
+    div.querySelectorAll('[data-mm-del]').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const name = btn.getAttribute('data-mm-del');
+        if (!confirm(`"${name}" modelini o'chirishni xohlaysizmi?`)) return;
+        try {
+          const r = await api(`/api/models/${encodeURIComponent(name)}`, { method: 'DELETE' });
+          if (!r.ok) { const t = await r.text(); throw new Error(t || `HTTP ${r.status}`); }
+          setStatus(`✓ ${name} o'chirildi`);
+          await refreshModelsTable();
+          await loadAiStatus(); // toolbar dropdown'ini yangilash
+        } catch (e) {
+          alert('O\'chirib bo\'lmadi: ' + (e.message || e));
+        }
+      });
+    });
+  } catch (e) {
+    div.textContent = 'Modellarni olib bo\'lmadi: ' + (e.message || e);
+  }
+}
+
+(function bindModelMgr() {
+  const b = $('modelMgrBtn');
+  if (b) b.addEventListener('click', openModelMgrModal);
+  const c = $('mmCloseBtn');
+  if (c) c.addEventListener('click', closeModelMgrModal);
+  const badge = $('activeLearnBadge');
+  if (badge) badge.addEventListener('click', openModelMgrModal);
+})();
+
+// Active learning: header'da bildirishnoma (kuniga 1 marta poll)
+async function pollActiveLearning() {
+  if (!state._user) return;
+  try {
+    const j = await apiJson('/api/training/suggestion');
+    const badge = $('activeLearnBadge');
+    if (!badge) return;
+    if (j.should_retrain) {
+      badge.hidden = false;
+      badge.textContent = `🎓 Train: ${j.eligible_for_training} ann`;
+    } else {
+      badge.hidden = true;
+    }
+  } catch {}
+}
+setInterval(pollActiveLearning, 60_000);  // har daqiqada
+setTimeout(pollActiveLearning, 5_000);
 $('aiClearBtn').addEventListener('click', clearSuggestions);
 $('aiAcceptAllBtn').addEventListener('click', acceptAllSuggestions);
 $('aiConfSlider').addEventListener('input', (e) => {
@@ -4248,13 +6109,29 @@ $('aiConfSlider').addEventListener('input', (e) => {
   applyAiThreshold();
 });
 
-$('exportBtn').addEventListener('click', () => {
+function downloadDatasetExport(fmt) {
   const a = document.createElement('a');
-  a.href = '/api/export?format=coco';
+  a.href = `/api/export?format=${encodeURIComponent(fmt)}`;
   a.download = '';
   document.body.appendChild(a);
   a.click();
   a.remove();
+}
+$('exportBtn').addEventListener('click', () => downloadDatasetExport('coco'));
+$('exportYoloBtn').addEventListener('click', () => downloadDatasetExport('yolo'));
+$('exportVocBtn').addEventListener('click', () => downloadDatasetExport('voc'));
+$('exportCsvBtn').addEventListener('click', () => downloadDatasetExport('csv'));
+
+// Manual save: button + Ctrl/Cmd+S, with an unsaved-changes guard on unload.
+$('saveBtn').addEventListener('click', () => { if (state.dirty) saveAnnotations(); });
+window.addEventListener('keydown', (e) => {
+  if ((e.ctrlKey || e.metaKey) && (e.key === 's' || e.key === 'S')) {
+    e.preventDefault();
+    if (state.dirty) saveAnnotations();
+  }
+});
+window.addEventListener('beforeunload', (e) => {
+  if (state.dirty) { e.preventDefault(); e.returnValue = ''; }
 });
 
 function _zoomBy(factor) {
@@ -4357,12 +6234,44 @@ window.addEventListener('keydown', (e) => {
     _quickStatus('recall'); e.preventDefault();
   } else if (e.key === '?') {
     showHotkeysModal();
+  } else if (e.key === 'h' || e.key === 'H') {
+    // (A3) Heatmap toggle
+    const hb = $('aiHeatmapBtn');
+    if (hb && !hb.hidden) { toggleUncertaintyHeatmap(); e.preventDefault(); }
+  } else if (e.key === 'm' || e.key === 'M') {
+    // (B4) W/L preset: Mass
+    const p = MAMMO_PRESETS.mass; if (p) applyWl(p.wc, p.ww, 'mass');
+  } else if (e.key === 'c' || e.key === 'C') {
+    // Ctrl+C allaqachon yuqorida — bu yerga oddiy C tushadi
+    const p = MAMMO_PRESETS.calc; if (p) applyWl(p.wc, p.ww, 'calc');
+  } else if (e.key === 'l' || e.key === 'L') {
+    // (B4) W/L preset: Skin (L for sk-L-in, S band)
+    const p = MAMMO_PRESETS.skin; if (p) applyWl(p.wc, p.ww, 'skin');
+  } else if (e.shiftKey && (e.key === 'A' || e.key === 'a')) {
+    // (A1/A3) AI re-run
+    const ai = $('aiRunBtn');
+    if (ai && !ai.hidden && !ai.disabled) { ai.click(); e.preventDefault(); }
+  } else if (e.key >= '1' && e.key <= '5') {
+    // (B8) Tezkor label tanlash: 1-5
+    const lsel = $('labelSelect');
+    if (lsel && lsel.options.length > 0) {
+      const idx = parseInt(e.key, 10) - 1;
+      if (idx < lsel.options.length) {
+        lsel.selectedIndex = idx;
+        lsel.dispatchEvent(new Event('change'));
+        setStatus(`Label: ${lsel.value}`);
+      }
+    }
+  } else if (e.key === 'Tab') {
+    _cycleAnn(e.shiftKey ? -1 : +1); e.preventDefault();
   } else if (e.key === 'Enter' && state.tool === 'poly') {
     e.preventDefault();
     finalizePolyDraw();
   } else if (e.key === 'Escape') {
     if (state.tool === 'poly' && polyDraw.points.length > 0) {
       cancelPolyDraw();
+    } else if ((state.tool === 'ruler' || state.tool === 'angle') && measureDraw.points.length > 0) {
+      cancelMeasureDraw();
     } else {
       state.selectedId = null; renderSvg(); renderAnnoList();
     }
@@ -4435,14 +6344,48 @@ function pasteAnns() {
 
 function showHotkeysModal() {
   const lines = [
-    'Tool: V=Select  B=BBox  P=Polygon',
-    'Zoom: + = , - _ , 0 (1:1) , F (fit) , I (invert)',
-    'Frame: ← → (multi-frame DICOM)',
-    'Annotatsiya: J/↓ next, K/↑ prev, Delete o\'chirish',
-    'Status: S=Submit  Y=Approve  N=Reject  R=Recall',
-    'Clipboard: Ctrl+C (nusxa) Ctrl+V (qo\'yish)',
-    'Polygon: Enter (yopish), Esc (bekor)',
-    '?: shu yordam',
+    '── ASBOBLAR ──',
+    '  V        Select',
+    '  B        BBox chizish',
+    '  P        Polygon chizish',
+    '',
+    '── KO\'RINISH ──',
+    '  F        Ekrunga moslash',
+    '  0        1:1 piksel',
+    '  + / -    Zoom',
+    '  I        Invert (rang ag\'darish)',
+    '',
+    '── W/L PRESETLAR (mammografiya) ──',
+    '  M        Mass (WC=2000 WW=4000)',
+    '  C        Calc (WC=600 WW=1200, mikrokalsifikatsiya)',
+    '  L        Skin (WC=2500 WW=5000)',
+    '',
+    '── ANNOTATSIYA ──',
+    '  Tab      Keyingi annotatsiya',
+    '  Shift+Tab  Oldingi annotatsiya',
+    '  J / ↓    Keyingi',
+    '  K / ↑    Oldingi',
+    '  Delete   Tanlanganni o\'chirish',
+    '  1 – 5    Tezkor label tanlash (toolbar ro\'yxatidan)',
+    '  Enter    Polygon\'ni yopish',
+    '  Esc      Bekor qilish / tanlovni olib tashlash',
+    '',
+    '── KLIPBOARD ──',
+    '  Ctrl+C   Annotatsiyalarni nusxalash',
+    '  Ctrl+V   Qo\'yish',
+    '  Ctrl+S   Saqlash',
+    '',
+    '── AI ──',
+    '  Shift+A  AI tahlilni qayta ishga tushirish',
+    '  H        🌡 Uncertainty heatmap (yoqish/o\'chirish)',
+    '',
+    '── FRAME (ko\'p kadrli DICOM) ──',
+    '  ← / →    Oldingi / keyingi kadr',
+    '',
+    '── HOLAT ──',
+    '  S=Submit  Y=Approve  N=Reject  R=Recall',
+    '',
+    '  ?        Bu yordam oynasini ko\'rsatish',
   ];
   alert(lines.join('\n'));
 }
@@ -4592,3 +6535,116 @@ function wsConnect() {
     setStatus('ishga tushirish xatosi: ' + e.message);
   }
 })();
+
+// ===== Mammografiya hisoboti generatori =====
+let _reportFindings = null;
+function _reportType(label) {
+  const s = (label || '').toString().toLowerCase();
+  if (/massa|mass|tumor|nodul/.test(s)) return 'mass';
+  if (/kals|calc/.test(s)) return 'calcification';
+  if (/asimmetr|asymmetr/.test(s)) return 'asymmetry';
+  if (/arxitektura|architect|distortion/.test(s)) return 'architectural_distortion';
+  return label || 'mass';
+}
+function buildReportDetections() {
+  const m = state.meta || {};
+  const lat = m.ImageLaterality || m.Laterality || '';
+  const view = m.ViewPosition || '';
+  return (state.annotations || []).map(a => {
+    const bb = a.bbox || [0, 0, 0, 0];
+    const cx = bb[0] + bb[2] / 2, cy = bb[1] + bb[3] / 2;
+    const lbl = a.label || (Array.isArray(a.labels) ? a.labels[0] : '') || '';
+    const conf = (typeof a.score === 'number') ? a.score
+      : (typeof a.confidence === 'number') ? a.confidence : null;
+    return { laterality: lat, view, cx, cy, type: _reportType(lbl), birads: a.bi_rads || '0', confidence: conf };
+  });
+}
+async function generateReport() {
+  const status = $('reportStatus');
+  const dets = buildReportDetections();
+  if (!dets.length) { status.textContent = "Annotatsiya yo'q — avval lezyon belgilang"; $('reportText').value = ''; return; }
+  const m = state.meta || {};
+  const views = [];
+  const lv = (m.ImageLaterality || '') + (m.ViewPosition ? '-' + m.ViewPosition : '');
+  if (lv) views.push(lv);
+  $('reportRegenBtn').disabled = true;
+  status.textContent = 'yaratilmoqda…';
+  try {
+    const j = await apiJson('/api/report/generate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ detections: dets, dicom_meta: { acr_density: '' }, study_views: views, mode: $('reportMode').value, lang: 'uz' }),
+    });
+    $('reportText').value = j.report || '';
+    const modeLbl = {
+      local: '🧠 Lokal AI', cloud: '🤖 Claude', llm: '🤖 Claude',
+      template: '📄 Shablon', template_fallback: '📄 Shablon (lokal model topilmadi)'
+    }[j.mode] || j.mode;
+    $('reportModeBadge').textContent = '· ' + modeLbl + (j.model ? ' (' + j.model + ')' : '');
+    const fnd = j.findings || {};
+    _reportFindings = j.findings || null;
+    const n = (fnd.lesions ? fnd.lesions.length : dets.length);
+    $('reportFindings').textContent = n + ' ta topilma · Umumiy: BI-RADS ' + (fnd.overall_birads || j.birads || '?');
+    const err = j.local_error || j.llm_error;
+    status.textContent = err ? ('⚠ ' + err) : '✓';
+  } catch (e) {
+    status.innerHTML = '<span style="color:#ef4444">Xato: ' + (e.message || e) + '</span>';
+  } finally {
+    $('reportRegenBtn').disabled = false;
+  }
+}
+async function loadReportBackends() {
+  const el = $('reportBackends');
+  if (!el) return;
+  try {
+    const j = await apiJson('/api/report/status');
+    if (j.ollama) {
+      const has = (j.ollama_models || []).length;
+      el.innerHTML = "🧠 Lokal AI (Ollama): <span style='color:#22c55e'>tayyor</span> · "
+        + (has ? j.ollama_models.join(', ') : ("model yo'q — <code>ollama pull " + j.ollama_default + "</code>"));
+    } else {
+      el.innerHTML = "🧠 Lokal AI (Ollama): <span style='color:#888'>topilmadi</span> — shablon ishlatiladi "
+        + "(o'rnatib <code>ollama pull " + j.ollama_default + "</code> qilsangiz tabiiy matn chiqadi).";
+    }
+  } catch (e) { el.textContent = ''; }
+}
+async function exportReportSR() {
+  const report = ($('reportText').value || '').trim();
+  const status = $('reportStatus');
+  if (!report) { status.textContent = 'Avval hisobot yarating'; return; }
+  const source = refSource(), ref = refValue();
+  if (!source || !ref) { status.textContent = 'Tasvir yuklanmagan'; return; }
+  const btn = $('reportSrBtn'); btn.disabled = true;
+  status.textContent = 'DICOM SR yaratilmoqda…';
+  try {
+    const r = await api('/api/report/export-sr', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ source, ref, report, findings: _reportFindings, verified: false }),
+    });
+    const blob = await r.blob();
+    const cd = r.headers.get('Content-Disposition') || '';
+    const m = cd.match(/filename="([^"]+)"/);
+    const fname = (m && m[1]) || 'report_sr.dcm';
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = fname; document.body.appendChild(a); a.click();
+    a.remove(); URL.revokeObjectURL(url);
+    status.textContent = '💾 DICOM SR yuklab olindi: ' + fname;
+  } catch (e) {
+    status.innerHTML = '<span style="color:#ef4444">SR xato: ' + (e.message || e) + '</span>';
+  } finally {
+    btn.disabled = false;
+  }
+}
+if ($('reportBtn')) {
+  $('reportBtn').addEventListener('click', () => { $('reportModal').hidden = false; loadReportBackends(); generateReport(); });
+  $('reportSrBtn').addEventListener('click', exportReportSR);
+  $('reportRegenBtn').addEventListener('click', generateReport);
+  $('reportMode').addEventListener('change', generateReport);
+  $('reportCloseBtn').addEventListener('click', () => { $('reportModal').hidden = true; });
+  $('reportCopyBtn').addEventListener('click', async () => {
+    try { await navigator.clipboard.writeText($('reportText').value); $('reportStatus').textContent = '📋 nusxa olindi'; }
+    catch { $('reportStatus').textContent = 'nusxa olinmadi'; }
+  });
+}

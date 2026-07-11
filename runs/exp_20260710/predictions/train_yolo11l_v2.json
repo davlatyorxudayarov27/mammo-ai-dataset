@@ -1,0 +1,20 @@
+{
+ "name": "train_yolo11l_v2",
+ "weights": "trained_8class_ai_v2_ep50.pt",
+ "conf": 0.05,
+ "iou": 0.3,
+ "split": "train",
+ "n_matched": 449,
+ "n_pred": 1125,
+ "n_gt": 601,
+ "class_names": [
+  "BIRADS12",
+  "BIRADS45",
+  "architectural_distortion",
+  "asymmetry",
+  "calcification",
+  "lymph_node",
+  "mass",
+  "other"
+ ]
+}

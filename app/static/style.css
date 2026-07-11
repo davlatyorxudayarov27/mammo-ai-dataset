@@ -266,6 +266,8 @@ aside.meta-pane {
   border: 1px solid rgba(40,217,127,0.4); border-radius: 9px;
   font-size: 10px; font-weight: 600;
 }
+/* Annotatsiyasi bor fayl/papka nomi boshqa (yashil) rangda */
+.file-list .name.has-anno { color: var(--ok); }
 
 .pane { padding: 10px; }
 .upload-zone {
@@ -291,6 +293,23 @@ button {
 button:hover { border-color: var(--accent); }
 button:disabled { opacity: 0.5; cursor: not-allowed; }
 button.tool.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+
+/* Manual save button: highlighted while there are unsaved changes. */
+#saveBtn.pending {
+  border-color: var(--warn);
+  color: var(--warn);
+  font-weight: 600;
+}
+#saveBtn:disabled { opacity: 0.5; cursor: default; }
+
+/* Radiomics modal */
+.radiomics-controls { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 10px; }
+.radiomics-info { flex: 1; min-width: 180px; font-size: 12px; color: var(--muted); }
+.radiomics-info b { color: var(--text); }
+.radiomics-table { width: 100%; border-collapse: collapse; margin: 2px 0 10px; font-size: 12px; }
+.radiomics-table td { padding: 3px 8px; border-bottom: 1px solid var(--border); }
+.radiomics-table td.val { text-align: right; font-variant-numeric: tabular-nums; color: var(--text); }
+.radiomics-table td:first-child { color: var(--muted); }
 button#invertBtn.active { background: var(--accent); border-color: var(--accent); color: #fff; }
 
 select {
@@ -301,6 +320,84 @@ select {
   border-radius: 4px;
   font-size: 12px;
 }
+
+/* --- Multi-select label dropdown --- */
+.ms { position: relative; display: inline-block; vertical-align: middle; }
+.ms .ms-toggle {
+  background: var(--panel-2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  padding: 5px 22px 5px 8px;
+  border-radius: 4px;
+  font-size: 12px;
+  cursor: pointer;
+  min-width: 90px;
+  max-width: 220px;
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  position: relative;
+}
+.ms .ms-toggle::after {
+  content: "▾";
+  position: absolute;
+  right: 7px; top: 50%;
+  transform: translateY(-50%);
+  color: var(--muted);
+  font-size: 10px;
+}
+.ms .ms-toggle.has-sel { border-color: var(--accent); }
+.ms .ms-panel, .ms-panel.ms-portal {
+  position: fixed;
+  z-index: 9999;
+  min-width: 220px;
+  max-height: 320px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.45);
+  padding: 4px;
+  /* Bitta ustun: har element o'z satrida */
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.ms .ms-panel[hidden], .ms-panel.ms-portal[hidden] { display: none; }
+.ms .ms-opt, .ms-panel.ms-portal .ms-opt {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--text);
+  user-select: none;
+  box-sizing: border-box;
+}
+.ms .ms-opt:hover { background: var(--panel-2); }
+.ms .ms-opt input { margin: 0; accent-color: var(--accent); cursor: pointer; }
+.ms .ms-opt .ms-dot {
+  width: 10px; height: 10px; border-radius: 2px; flex-shrink: 0;
+  border: 1px solid rgba(0,0,0,0.4);
+}
+.ms .ms-opt .ms-name, .ms-panel.ms-portal .ms-opt .ms-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* Compact variant used inside annotation rows */
+.ms.ms-compact .ms-toggle { min-width: 70px; max-width: 160px; padding: 3px 18px 3px 6px; font-size: 11px; }
+.anno-row .info .ms { margin-right: 4px; vertical-align: middle; }
+.anno-row .info .lbl { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
 
 .ai-threshold {
   display: inline-flex; align-items: center; gap: 6px;
@@ -570,14 +667,34 @@ main.viewer {
   overflow: hidden;
 }
 .toolbar {
-  display: flex; align-items: center; gap: 6px;
-  padding: 6px 10px;
+  display: flex; align-items: center; gap: 5px;
+  padding: 4px 8px;
   background: var(--panel);
   border-bottom: 1px solid var(--border);
   flex-wrap: wrap;
 }
-.toolbar .sep { width: 1px; height: 18px; background: var(--border); margin: 0 4px; }
-.toolbar input[type="range"] { vertical-align: middle; }
+.toolbar .sep { width: 1px; height: 18px; background: var(--border); margin: 0 3px; }
+.toolbar button, .toolbar > select { padding: 4px 8px; }
+
+/* Toolbar ochiluvchi menyulari (Eksport / Ko'proq) — ixchamlik uchun */
+.tb-menu { position: relative; display: inline-block; }
+.tb-menu-btn.open { background: var(--accent); border-color: var(--accent); color: #fff; }
+.tb-menu-panel {
+  position: absolute; top: calc(100% + 4px); right: 0; z-index: 60;
+  display: flex; flex-direction: column; gap: 4px;
+  background: var(--panel); border: 1px solid var(--border);
+  border-radius: 6px; padding: 6px; min-width: 160px;
+  box-shadow: 0 8px 26px rgba(0,0,0,0.45);
+}
+.tb-menu-panel[hidden] { display: none; }
+.tb-menu-panel button, .tb-menu-panel select {
+  width: 100%; text-align: left; margin: 0;
+}
+.tb-menu-panel button[hidden], .tb-menu-panel select[hidden] { display: none; }
+.toolbar input[type="range"] { vertical-align: middle; width: 96px; }
+.toolbar > label { font-size: 11px; }
+.toolbar > select { max-width: 150px; }
+#aiModelSelect { max-width: 140px; }
 .toolbar label { color: var(--muted); font-size: 12px; display: inline-flex; align-items: center; gap: 4px; }
 .zoomLbl { color: var(--muted); font-size: 12px; margin-left: auto; }
 .presence {
@@ -676,6 +793,31 @@ main.viewer {
   -webkit-user-drag: none;
   image-rendering: -webkit-optimize-contrast;
 }
+/* (A3) Uncertainty heatmap overlay — DICOM ustida joylashadi */
+.img-stack #uncertaintyOverlay {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  mix-blend-mode: screen;
+  opacity: 0.85;
+  z-index: 1;
+}
+/* GMIC saliency (malignant diqqat zonasi) — DICOM ustida */
+.img-stack #gmicOverlay {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  opacity: 0.8;
+  z-index: 1;
+}
+#aiHeatmapBtn.active {
+  background: linear-gradient(135deg, #ff9933, #ff3333);
+  color: #fff;
+}
 .img-stack svg {
   position: absolute;
   inset: 0;
@@ -694,6 +836,203 @@ main.viewer {
 .img-stack svg .box.selected {
   stroke-width: 3;
   filter: drop-shadow(0 0 4px rgba(255,255,255,0.6));
+}
+
+/* (C1) 4-view side-by-side grid */
+/* (C1) Study hanging — chap eskiz rail + 2×2 grid / yonma-yon pair */
+.four-view {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  gap: 6px;
+  padding: 6px;
+  background: #000;
+  z-index: 5;
+  overflow: hidden;
+}
+/* Chap rail — real DICOM eskizlar */
+.four-view .sv-rail {
+  flex: 0 0 118px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  overflow: auto;
+  background: #0b0f17;
+  border: 1px solid #1c2740;
+  border-radius: 6px;
+  padding: 6px;
+}
+.four-view .sv-rail-title {
+  color: #6ea8ff; font-size: 11px; font-weight: 700;
+  letter-spacing: 2px; text-align: center; padding: 2px 0 5px;
+  border-bottom: 1px solid #1c2740;
+}
+.four-view .sv-thumb {
+  position: relative;
+  background: #05070c;
+  border: 1px solid #1c2740;
+  border-radius: 4px;
+  aspect-ratio: 3 / 4;
+  display: flex; align-items: center; justify-content: center;
+  overflow: hidden; cursor: pointer;
+  transition: border-color .12s, box-shadow .12s;
+}
+.four-view .sv-thumb:hover { border-color: #3a5f9e; }
+.four-view .sv-thumb img { max-width: 100%; max-height: 100%; object-fit: contain; }
+.four-view .sv-thumb.active { border-color: #4a90e2; box-shadow: 0 0 0 1px #4a90e2; }
+.four-view .sv-thumb.empty { border-style: dashed; cursor: default; }
+.four-view .sv-thumb-cap {
+  position: absolute; bottom: 2px; left: 3px;
+  background: rgba(0,0,0,0.6); color: #ffd24d;
+  font-size: 10px; font-weight: 600; padding: 0 4px; border-radius: 2px;
+}
+.four-view .sv-thumb-x { color: #334; font-size: 20px; }
+/* Asosiy maydon */
+.four-view .sv-main { position: relative; flex: 1; min-width: 0; }
+.four-view .sv-stage {
+  position: absolute; inset: 0;
+  display: grid; gap: 6px;
+}
+.four-view .sv-stage-grid {
+  grid-template-columns: 1fr 1fr;
+  grid-template-rows: 1fr 1fr;
+}
+.four-view .sv-stage-pair {
+  grid-template-columns: 1fr 1fr;
+  grid-template-rows: 1fr;
+}
+.four-view .sv-cell {
+  position: relative;
+  background: #111;
+  border: 1px solid #333;
+  overflow: hidden;
+  display: flex; align-items: center; justify-content: center;
+}
+.four-view .sv-cell.empty { background: #050505; border-style: dashed; color: #555; font-size: 12px; }
+.four-view .sv-cell img {
+  max-width: 100%; max-height: 100%;
+  object-fit: contain; cursor: pointer;
+}
+.four-view .sv-empty-txt { color: #556; font-size: 13px; }
+.four-view .fv-label {
+  position: absolute;
+  top: 4px; left: 6px;
+  background: rgba(0,0,0,0.6);
+  color: #4fd0ff;
+  padding: 2px 8px;
+  border-radius: 3px;
+  font-size: 12px;
+  font-weight: 600;
+  pointer-events: none;
+  z-index: 2;
+}
+.four-view .fv-close {
+  position: absolute;
+  top: 6px; right: 8px;
+  background: rgba(180,40,40,0.85);
+  color: #fff;
+  border: 0;
+  padding: 4px 10px;
+  border-radius: 3px;
+  cursor: pointer;
+  font-size: 12px;
+  z-index: 6;
+}
+.four-view .sv-back {
+  position: absolute;
+  top: 6px; right: 92px;
+  background: rgba(40,90,160,0.9);
+  color: #fff;
+  border: 0;
+  padding: 4px 10px;
+  border-radius: 3px;
+  cursor: pointer;
+  font-size: 12px;
+  z-index: 6;
+}
+#fourViewBtn.active { background: var(--accent, #4a90e2); color: #fff; }
+#diagBtn.tool { background: #1b3a2a; }
+
+/* 🩺 Tashxis paneli (o'ng panel tepasida) */
+.diag-box {
+  margin: 6px; padding: 8px 10px; border-radius: 6px;
+  border: 1px solid var(--border); background: var(--panel-2, #161b26);
+  font-size: 12px;
+}
+.diag-box.mal { border-color: #e0556b; background: rgba(224,85,107,0.08); }
+.diag-box.ben { border-color: #28d97f; background: rgba(40,217,127,0.08); }
+.diag-box .diag-head {
+  display: flex; justify-content: space-between; align-items: center;
+  font-weight: 600; color: var(--muted); font-size: 11px;
+  text-transform: uppercase; letter-spacing: 0.4px; margin-bottom: 4px;
+}
+.diag-box .diag-x {
+  background: transparent; border: 0; color: var(--muted);
+  cursor: pointer; font-size: 13px; padding: 0 2px;
+}
+.diag-box .diag-top { font-size: 18px; font-weight: 700; margin-bottom: 6px; }
+.diag-box.mal .diag-top { color: #ff7088; }
+.diag-box.ben .diag-top { color: #3fe08f; }
+.diag-box .diag-top small { font-size: 12px; opacity: 0.75; font-weight: 600; }
+.diag-row { display: flex; align-items: center; gap: 6px; margin: 3px 0; }
+.diag-row .diag-k { flex: 0 0 96px; color: var(--text); }
+.diag-row .diag-bar { flex: 1; height: 8px; background: rgba(255,255,255,0.08); border-radius: 4px; overflow: hidden; }
+.diag-row .diag-bar i { display: block; height: 100%; background: var(--muted); }
+.diag-row.hot .diag-bar i { background: currentColor; }
+.diag-box.mal .diag-row.hot { color: #ff7088; }
+.diag-box.ben .diag-row.hot { color: #3fe08f; }
+.diag-row .diag-v { flex: 0 0 44px; text-align: right; color: var(--muted); }
+.diag-box .diag-note { margin-top: 6px; font-size: 10px; color: var(--muted); }
+.diag-box .diag-heat {
+  margin-top: 8px; width: 100%; padding: 5px; font-size: 12px;
+  background: var(--panel); border: 1px solid var(--border);
+  border-radius: 4px; cursor: pointer; color: var(--text);
+}
+.diag-box .diag-heat.on { background: linear-gradient(135deg,#ff9933,#ff3333); color: #fff; border-color: #ff5050; }
+
+/* (B2) Ruler / Angle */
+.img-stack svg .measure-line {
+  stroke-width: 2;
+  vector-effect: non-scaling-stroke;
+  pointer-events: stroke;
+  cursor: pointer;
+}
+.img-stack svg .measure-line.selected { stroke-width: 3; }
+.img-stack svg .measure-preview {
+  stroke: #ffd24d;
+  stroke-width: 2;
+  stroke-dasharray: 6 3;
+  vector-effect: non-scaling-stroke;
+  fill: none;
+  pointer-events: none;
+}
+.img-stack svg .measure-dot {
+  stroke-width: 1.5;
+  vector-effect: non-scaling-stroke;
+  pointer-events: none;
+}
+.img-stack svg .measure-text {
+  font-weight: 600;
+  pointer-events: none;
+}
+
+/* (A2) AI ishonch zonalari — bbox + polygon uchun */
+.img-stack svg .ai-zone-auto_accept {
+  stroke-dasharray: none;
+  stroke-width: 2.5;
+}
+.img-stack svg .ai-zone-review {
+  stroke-dasharray: 6 3;
+  stroke-width: 2.5;
+}
+.img-stack svg .ai-zone-suspect {
+  stroke-dasharray: 3 3;
+  stroke-width: 3;
+  animation: ai-suspect-pulse 1.4s ease-in-out infinite;
+}
+@keyframes ai-suspect-pulse {
+  0%, 100% { opacity: 1.0; stroke-width: 3; }
+  50%      { opacity: 0.55; stroke-width: 4; }
 }
 .img-stack svg .preview {
   fill: none;
@@ -766,6 +1105,12 @@ main.viewer {
 .img-stack.drawing-poly svg { pointer-events: all; cursor: crosshair; }
 .img-stack.drawing-poly svg .box,
 .img-stack.drawing-poly svg .poly { pointer-events: none; }
+/* Ruler/Angle (drawing-measure) va Smart-click (drawing-smart) uchun SVG click
+   yoqiladi — aks holda pointer-events:none tufayli bosish ishlamaydi (bug fix). */
+.img-stack.drawing-measure svg,
+.img-stack.drawing-smart svg { pointer-events: all; cursor: crosshair; }
+.img-stack.drawing-measure svg .box, .img-stack.drawing-measure svg .poly,
+.img-stack.drawing-smart svg .box, .img-stack.drawing-smart svg .poly { pointer-events: none; }
 .img-stack svg .label {
   font-family: ui-monospace, "Cascadia Mono", Menlo, monospace;
   fill: #fff;
@@ -781,11 +1126,35 @@ main.viewer {
 
 .wl-bar {
   display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 12px;
-  padding: 8px 12px;
+  grid-template-columns: 1fr 1fr auto;
+  gap: 10px;
+  padding: 5px 12px;
   background: var(--panel);
   border-top: 1px solid var(--border);
+}
+/* (B4) Mammografiya W/L presetlari — bir qatorda ixcham */
+.wl-presets { display: flex; align-items: center; gap: 5px; flex-wrap: nowrap; }
+.wl-preset-label { color: var(--muted); font-size: 11px; margin-right: 2px; }
+.wl-preset {
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  color: var(--text);
+  padding: 3px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 12px;
+  white-space: nowrap;
+}
+.wl-preset:hover { background: var(--accent-2, #2d3748); border-color: var(--accent, #4a90e2); }
+.wl-preset.active { background: var(--accent, #4a90e2); color: #fff; border-color: var(--accent, #4a90e2); }
+.wl-preset-custom {
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  color: var(--text);
+  padding: 3px 6px;
+  border-radius: 4px;
+  font-size: 12px;
+  max-width: 120px;
 }
 .wl-group { display: flex; align-items: center; gap: 8px; }
 .wl-group label { color: var(--muted); font-size: 12px; display: flex; align-items: center; gap: 6px; }
@@ -980,3 +1349,34 @@ main.viewer {
   color: var(--text); padding: 4px 8px; border-radius: 3px; font-size: 12px;
 }
 .report-search button { padding: 4px 10px; }
+
+/* ===== Xavf tahlili (benign/malignant klassifikator) ===== */
+#riskBtn.tool { }
+.risk-head {
+  display: flex; justify-content: space-between; align-items: baseline;
+  font-size: 18px; font-weight: 700; margin-bottom: 10px;
+}
+.risk-head .risk-conf { font-size: 13px; opacity: 0.8; color: var(--text); }
+.risk-bar {
+  display: flex; height: 30px; border-radius: 6px; overflow: hidden;
+  border: 1px solid var(--border); margin-bottom: 12px; background: #1a1a1a;
+}
+.risk-bar-mal { background: linear-gradient(90deg,#ff7875,#ff4d4f); }
+.risk-bar-ben { background: linear-gradient(90deg,#28d97f,#1aa860); }
+.risk-bar-mal, .risk-bar-ben {
+  display: flex; align-items: center; justify-content: center;
+  color: #fff; font-size: 12px; font-weight: 700; white-space: nowrap;
+  transition: width 0.4s ease;
+}
+.risk-meta {
+  display: flex; flex-wrap: wrap; gap: 14px; font-size: 13px;
+  color: var(--muted); margin-bottom: 10px;
+}
+.risk-meta b { color: var(--text); }
+.risk-note { padding: 8px 10px; border-radius: 5px; font-size: 13px; margin-bottom: 10px; }
+.risk-note.ok { background: rgba(40,217,127,0.12); color: #8ff0c0; }
+.risk-note.warn { background: rgba(255,193,7,0.14); color: #ffd24d; }
+.risk-disclaimer {
+  font-size: 12px; color: var(--muted); border-top: 1px solid var(--border);
+  padding-top: 8px; line-height: 1.5;
+}

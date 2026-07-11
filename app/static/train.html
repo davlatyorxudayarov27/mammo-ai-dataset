@@ -1,0 +1,486 @@
+<!DOCTYPE html>
+<html lang="uz">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>🎓 Model Studio — MAMOGRAF</title>
+<link rel="stylesheet" href="style.css">
+<style>
+  /* style.css'dagi global "body{overflow:hidden;height:100%}" (asosiy ilova uchun)
+     train.html'ga ham meros bo'lib, sahifa viewport'dan baland bo'lsa skrolni o'chiradi.
+     Shu yerda override qilamiz — vertikal skrol qaytadi. */
+  html, body { height: auto; min-height: 100%; overflow-x: hidden; overflow-y: auto; }
+  body { background: var(--bg, #0a0f1c); color: var(--text, #eee); font-family: -apple-system, sans-serif; margin: 0; }
+  .ts-header { padding: 12px 20px; background: var(--panel, #1a1f2e); border-bottom: 1px solid var(--border, #333); display: flex; align-items: center; gap: 14px; }
+  .ts-header h1 { font-size: 18px; margin: 0; }
+  .ts-back { background: var(--panel-2, #2a2f3e); color: var(--text); border: 1px solid var(--border); padding: 6px 12px; border-radius: 4px; cursor: pointer; text-decoration: none; font-size: 13px }
+  .ts-back:hover { border-color: var(--accent, #4a90e2); }
+  .ts-close { margin-left:6px; width:32px; height:32px; display:inline-flex; align-items:center;
+    justify-content:center; background:var(--panel-2,#2a2f3e); color:var(--muted,#8a96a4);
+    border:1px solid var(--border,#333); border-radius:6px; cursor:pointer; text-decoration:none;
+    font-size:16px; font-weight:700; line-height:1 }
+  .ts-close:hover { border-color:#ef4444; color:#ef4444 }
+  .ts-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; padding: 16px; max-width: 1400px; margin: 0 auto; }
+  @media (max-width: 980px) { .ts-grid { grid-template-columns: 1fr; } }
+  .ts-section { background: var(--panel); border: 1px solid var(--border); border-radius: 6px; padding: 14px; }
+  .ts-section h2 { font-size: 14px; margin: 0 0 10px; color: var(--accent, #4a90e2); border-bottom: 1px solid var(--border); padding-bottom: 6px }
+  .ts-row { display: grid; grid-template-columns: 140px 1fr; gap: 8px; align-items: center; margin: 6px 0; font-size: 13px }
+  .ts-row label { color: var(--muted, #888); }
+  .ts-row input, .ts-row select { background: var(--panel-2); color: var(--text); border: 1px solid var(--border); border-radius: 3px; padding: 4px 8px; width: 100%; font-size: 13px; box-sizing: border-box }
+  .ts-row .ts-hint { grid-column: 1/-1; font-size: 11px; color: var(--muted); margin: -3px 0 4px 144px }
+  .ts-actions { display: flex; gap: 8px; margin-top: 14px; align-items: center; }
+  .ts-btn-primary { background: var(--accent, #4a90e2); color: #fff; border: 0; padding: 10px 18px; border-radius: 4px; font-size: 14px; cursor: pointer; font-weight: 600 }
+  .ts-btn-primary:disabled { opacity: .5; cursor: not-allowed }
+  .ts-btn { background: var(--panel-2); color: var(--text); border: 1px solid var(--border); padding: 8px 14px; border-radius: 4px; cursor: pointer; font-size: 13px }
+  .ts-status { font-size: 13px; color: var(--muted); }
+  .ts-log { font-family: monospace; font-size: 11px; background: #000; color: #0f0; padding: 8px; border-radius: 3px; max-height: 320px; overflow: auto; white-space: pre-wrap; margin-top: 8px }
+  .ts-runs { font-size: 12px; max-height: 200px; overflow: auto }
+  .ts-runs table { width: 100%; border-collapse: collapse; }
+  .ts-runs th, .ts-runs td { padding: 4px 6px; border-bottom: 1px solid var(--border); text-align: left }
+  .ts-runs th { background: var(--panel-2); position: sticky; top: 0 }
+  .ts-runs tr:hover { background: rgba(74,144,226,0.08); cursor: pointer }
+  .ts-status-running { color: #ffb000 }
+  .ts-status-done { color: #22c55e }
+  .ts-status-failed { color: #ef4444 }
+  .ts-status-queued { color: #888 }
+  .ts-status-stopped, .ts-status-stopping { color: #f59e0b }
+  details summary { cursor: pointer; padding: 4px 0; font-size: 12px; color: var(--muted) }
+  .ts-tag { display: inline-block; background: var(--panel-2); color: var(--accent); padding: 1px 6px; border-radius: 3px; font-size: 11px; margin-left: 6px }
+  .ts-chart { width: 100%; height: 150px; display: block; margin: 8px 0; background: #0b0f1a; border: 1px solid var(--border); border-radius: 4px }
+  .ts-chart-title { font-size: 11px; color: var(--muted); margin: 8px 0 2px }
+  .ts-validate { font-size: 12px; margin-top: 8px; border-top: 1px dashed var(--border); padding-top: 8px }
+  .ts-validate .vrow { display: flex; justify-content: space-between; padding: 2px 0 }
+  .ts-bar { height: 6px; border-radius: 3px; background: var(--accent); display: inline-block; vertical-align: middle }
+  .ts-warn { color: #ffb000 } .ts-bad { color: #ef4444 } .ts-ok { color: #22c55e }
+  .ts-gpu { font-size: 12px; color: var(--muted); white-space: nowrap }
+  .ts-gpu .bar-wrap { display: inline-block; width: 70px; height: 7px; background: #2a2f3e; border-radius: 4px; overflow: hidden; vertical-align: middle; margin: 0 4px }
+  .ts-gpu .bar-fill { height: 100%; background: linear-gradient(90deg,#22c55e,#ffb000,#ef4444); }
+  #stopBtn { background: #7a1f1f; color: #fff; border: 0; padding: 10px 18px; border-radius: 4px; font-size: 14px; cursor: pointer; font-weight: 600 }
+  #stopBtn:hover { background: #a02525 }
+  .ts-metric-cards { display: flex; gap: 8px; flex-wrap: wrap; margin: 10px 0 4px }
+  .ts-mcard { flex: 1; min-width: 78px; background: var(--panel-2, #2a2f3e); border: 1px solid var(--border, #333); border-radius: 6px; padding: 8px 6px; text-align: center }
+  .ts-mcard .v { font-size: 19px; font-weight: 700; line-height: 1.1 }
+  .ts-mcard .l { font-size: 10px; color: var(--muted, #888); margin-top: 3px }
+  .ts-params { width: 100%; border-collapse: collapse; font-size: 12px; margin: 6px 0 2px }
+  .ts-params td { padding: 3px 6px; border-bottom: 1px solid var(--border, #333) }
+  .ts-params td:first-child { color: var(--muted, #888); width: 55% }
+  .ts-params code { color: var(--text, #eee) }
+  .ts-cm { border-collapse: collapse; font-size: 12px; margin-top: 6px }
+  .ts-cm th, .ts-cm td { border: 1px solid var(--border, #333); padding: 5px 10px; text-align: center }
+  .ts-cm th { background: var(--panel-2, #2a2f3e); color: var(--muted, #888); font-weight: 600 }
+  .ts-cm .good { color: #22c55e; font-weight: 700 } .ts-cm .bad { color: #ef4444; font-weight: 700 }
+  .ts-mbars { flex: 1; min-width: 220px; font-size: 12px }
+  .ts-mbars .mrow { display: grid; grid-template-columns: 118px 1fr 46px; gap: 6px; align-items: center; margin: 4px 0 }
+  .ts-mbars .mtrack { height: 12px; background: var(--panel-2, #2a2f3e); border-radius: 6px; overflow: hidden }
+  .ts-mbars .mfill { height: 100%; border-radius: 6px }
+
+  /* ══════════ BOOLFS — Xamdamov: bulcha belgilar ══════════
+     Ataylab boshqa rang (binafsha-siyoh) va boshqa shakl (chap chekkada
+     qalin gradient chiziq, kattaroq radius) — YOLO bo'limlaridan yaqqol ajralsin. */
+  :root { --bf: #a855f7; --bf-2: #6366f1; --bf-dim: #c4b5fd; }
+  .bf-wrap { grid-column: 1 / -1; }
+  .bf-section {
+    position: relative; background: linear-gradient(160deg, rgba(168,85,247,.10), rgba(99,102,241,.05) 60%, transparent);
+    border: 1px solid rgba(168,85,247,.35); border-radius: 14px; padding: 16px 18px 16px 22px;
+    margin-bottom: 16px; overflow: hidden;
+  }
+  .bf-section::before {   /* chap chekkadagi gradient "tasma" — asosiy vizual farq */
+    content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 5px;
+    background: linear-gradient(180deg, var(--bf), var(--bf-2));
+  }
+  .bf-section h2 {
+    font-size: 15px; margin: 0 0 4px; color: var(--bf); border: 0; padding: 0;
+    display: flex; align-items: center; gap: 8px; letter-spacing: .2px;
+  }
+  .bf-sub { font-size: 11.5px; color: var(--bf-dim); opacity: .8; margin: 0 0 12px }
+  .bf-formula {
+    font-family: "Cambria Math", Georgia, serif; font-size: 13px; color: #e9d5ff;
+    background: rgba(99,102,241,.10); border: 1px dashed rgba(168,85,247,.35);
+    border-radius: 8px; padding: 7px 12px; margin: 8px 0; display: inline-block;
+  }
+  .bf-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px }
+  @media (max-width: 980px) { .bf-grid { grid-template-columns: 1fr } }
+  .bf-row { display: grid; grid-template-columns: 150px 1fr; gap: 8px; align-items: center; margin: 7px 0; font-size: 13px }
+  .bf-row label { color: var(--bf-dim); opacity: .85 }
+  .bf-row input, .bf-row select {
+    background: rgba(10,15,28,.75); color: var(--text); border: 1px solid rgba(168,85,247,.30);
+    border-radius: 7px; padding: 5px 9px; width: 100%; font-size: 13px; box-sizing: border-box;
+  }
+  .bf-row input:focus, .bf-row select:focus { outline: none; border-color: var(--bf) }
+  .bf-hint { grid-column: 1/-1; font-size: 11px; color: var(--muted); margin: -4px 0 2px 158px }
+  .bf-btn {
+    background: linear-gradient(135deg, var(--bf), var(--bf-2)); color: #fff; border: 0;
+    padding: 10px 20px; border-radius: 9px; font-size: 14px; font-weight: 600; cursor: pointer;
+    box-shadow: 0 3px 14px rgba(168,85,247,.28);
+  }
+  .bf-btn:disabled { opacity: .45; cursor: not-allowed; box-shadow: none }
+  .bf-btn-ghost {
+    background: transparent; color: var(--bf-dim); border: 1px solid rgba(168,85,247,.4);
+    padding: 8px 14px; border-radius: 9px; cursor: pointer; font-size: 13px;
+  }
+  .bf-btn-stop { background: #7a1f4f; color: #fff; border: 0; padding: 10px 18px; border-radius: 9px; cursor: pointer; font-weight: 600 }
+  .bf-prog { height: 7px; background: rgba(10,15,28,.7); border-radius: 5px; overflow: hidden; margin: 10px 0 4px }
+  .bf-prog i { display: block; height: 100%; background: linear-gradient(90deg, var(--bf-2), var(--bf)); width: 0; transition: width .4s }
+  .bf-log { font-family: monospace; font-size: 11px; background: rgba(10,15,28,.85); color: #d8b4fe;
+    border: 1px solid rgba(168,85,247,.2); padding: 8px 10px; border-radius: 8px; max-height: 190px;
+    overflow: auto; white-space: pre-wrap; margin-top: 8px }
+  .bf-cards { display: flex; gap: 9px; flex-wrap: wrap; margin: 12px 0 6px }
+  .bf-card { flex: 1; min-width: 92px; background: rgba(99,102,241,.10); border: 1px solid rgba(168,85,247,.28);
+    border-radius: 10px; padding: 9px 7px; text-align: center }
+  .bf-card .v { font-size: 19px; font-weight: 700; color: #e9d5ff; line-height: 1.15 }
+  .bf-card .l { font-size: 10px; color: var(--muted); margin-top: 3px }
+  .bf-card.win { background: rgba(34,197,94,.12); border-color: rgba(34,197,94,.4) }
+  .bf-card.win .v { color: #4ade80 }
+  .bf-tbl { width: 100%; border-collapse: collapse; font-size: 12px; margin-top: 6px }
+  .bf-tbl th, .bf-tbl td { padding: 5px 8px; border-bottom: 1px solid rgba(168,85,247,.15); text-align: left }
+  .bf-tbl th { color: var(--bf-dim); font-weight: 600; background: rgba(99,102,241,.10) }
+  .bf-tbl tr:hover td { background: rgba(168,85,247,.06) }
+  .bf-tbl td.num { text-align: right; font-variant-numeric: tabular-nums }
+  .bf-best td { background: rgba(34,197,94,.10) !important; color: #4ade80; font-weight: 600 }
+  .bf-runs { max-height: 210px; overflow: auto }
+  .bf-runs tr { cursor: pointer }
+  .bf-fig { max-width: 100%; border-radius: 10px; border: 1px solid rgba(168,85,247,.25); margin: 8px 0; display: block }
+  .bf-badge { display: inline-block; background: rgba(168,85,247,.18); color: var(--bf-dim);
+    border: 1px solid rgba(168,85,247,.3); padding: 1px 8px; border-radius: 20px; font-size: 10.5px }
+  .bf-st-done { color: #4ade80 } .bf-st-failed { color: #ef4444 }
+  .bf-st-running { color: var(--bf) } .bf-st-stopped, .bf-st-interrupted { color: #f59e0b }
+</style>
+</head>
+<body>
+
+<div class="ts-header">
+  <a class="ts-back" href="/app">← Asosiy sahifa</a>
+  <h1>🎓 Model Studio</h1>
+  <span class="ts-status" id="userInfo"></span>
+  <span style="flex:1"></span>
+  <span class="ts-gpu" id="gpuInfo" title="GPU holati (nvidia-smi)">GPU: —</span>
+  <button class="ts-btn" id="refreshAllBtn">↻ Yangilash</button>
+  <a class="ts-close" href="/app" title="Yopish (asosiy sahifaga qaytish)">✕</a>
+</div>
+
+<div class="ts-grid">
+
+  <!-- LEFT: Konfiguratsiya -->
+  <div>
+    <div class="ts-section">
+      <h2>1️⃣ Dataset</h2>
+      <div class="ts-row">
+        <label>data.yaml</label>
+        <select id="datasetSel"><option value="">— mavjud datasetlar yuklanmoqda —</option></select>
+      </div>
+      <div class="ts-row">
+        <label>Yoki qo'lda</label>
+        <input type="text" id="dataYamlPath" placeholder="d:\datasets\mamograf_v1\data.yaml" />
+      </div>
+      <div class="ts-row"><span></span><span class="ts-hint" id="datasetInfo"></span></div>
+      <div class="ts-row"><span></span><button class="ts-btn" id="validateBtn" style="font-size:11px">🔍 Datasetni tekshirish</button></div>
+      <div class="ts-validate" id="datasetValidate" hidden></div>
+    </div>
+
+    <div class="ts-section">
+      <h2>2️⃣ Base model</h2>
+      <div class="ts-row">
+        <label>Arxitektura</label>
+        <select id="baseModelSel"></select>
+      </div>
+      <div class="ts-row">
+        <label>Pretrained</label>
+        <select id="pretrainedSel">
+          <option value="true">Ha — Coco og'irliklaridan boshla (tavsiya)</option>
+          <option value="false">Yo'q — bo'sh og'irliklar (scratch)</option>
+        </select>
+      </div>
+      <div class="ts-row">
+        <label>Resume</label>
+        <select id="resumeSel">
+          <option value="">— Yangi train —</option>
+        </select>
+        <div class="ts-row"><span></span><span class="ts-hint">Oldingi run'ning oxirgi epochidan davom ettirish</span></div>
+      </div>
+      <div class="ts-row">
+        <label>Yangi model nomi</label>
+        <input type="text" id="projectName" placeholder="(ixtiyoriy, mas. mass_detector_v3)" />
+      </div>
+    </div>
+
+    <div class="ts-section">
+      <h2>3️⃣ Asosiy parametrlar</h2>
+      <div class="ts-row"><label>Epochs</label><input type="number" id="epochs" value="50" min="1" max="500" /></div>
+      <div class="ts-row"><label>Batch size</label><input type="number" id="batch" value="8" min="1" max="64" /></div>
+      <div class="ts-row"><label>Image size</label><select id="imgsz">
+        <option value="512">512</option><option value="640">640</option>
+        <option value="768">768</option><option value="1024" selected>1024</option>
+        <option value="1280">1280</option><option value="1536">1536</option>
+      </select></div>
+      <div class="ts-row"><label>Optimizer</label><select id="optimizer">
+        <option value="auto" selected>auto (Ultralytics tanlaydi)</option>
+        <option value="SGD">SGD</option>
+        <option value="Adam">Adam</option>
+        <option value="AdamW">AdamW</option>
+      </select></div>
+      <div class="ts-row"><label>Device</label><select id="device">
+        <option value="">auto</option><option value="cpu">cpu</option>
+        <option value="0">GPU 0</option><option value="0,1">GPU 0+1</option>
+      </select></div>
+    </div>
+
+    <div class="ts-section">
+      <h2>4️⃣ Learning Rate</h2>
+      <div class="ts-row"><label>lr0 (boshlang'ich)</label><input type="number" id="lr0" value="0.01" step="0.0001" /></div>
+      <div class="ts-row"><label>lrf (yakuniy ×lr0)</label><input type="number" id="lrf" value="0.01" step="0.0001" /></div>
+      <div class="ts-row"><label>Momentum</label><input type="number" id="momentum" value="0.937" step="0.001" /></div>
+      <div class="ts-row"><label>Weight decay</label><input type="number" id="weight_decay" value="0.0005" step="0.0001" /></div>
+      <div class="ts-row"><label>Warmup epochs</label><input type="number" id="warmup_epochs" value="3" step="0.5" /></div>
+      <div class="ts-row"><label>Cosine LR</label><select id="cos_lr"><option value="false">No</option><option value="true">Yes (cosine schedule)</option></select></div>
+      <div class="ts-row"><label>Patience</label><input type="number" id="patience" value="50" min="1" /><div class="ts-row"><span></span><span class="ts-hint">N epochda mAP yaxshilanmasa to'xtaydi</span></div></div>
+      <div class="ts-row"><label>Seed</label><input type="number" id="seed" value="0" /></div>
+    </div>
+
+    <div class="ts-section">
+      <h2>5️⃣ Augmentation</h2>
+      <div class="ts-row"><label>HSV-Hue</label><input type="number" id="hsv_h" value="0.015" step="0.005" min="0" max="1" /></div>
+      <div class="ts-row"><label>HSV-Saturation</label><input type="number" id="hsv_s" value="0.7" step="0.05" min="0" max="1" /></div>
+      <div class="ts-row"><label>HSV-Value</label><input type="number" id="hsv_v" value="0.4" step="0.05" min="0" max="1" /></div>
+      <div class="ts-row"><label>Flip LR</label><input type="number" id="fliplr" value="0.5" step="0.05" min="0" max="1" /></div>
+      <div class="ts-row"><label>Flip UD</label><input type="number" id="flipud" value="0.0" step="0.05" min="0" max="1" /></div>
+      <div class="ts-row"><label>Scale</label><input type="number" id="scale" value="0.5" step="0.05" min="0" max="1" /></div>
+      <div class="ts-row"><label>Mosaic</label><input type="number" id="mosaic" value="1.0" step="0.1" min="0" max="1" /></div>
+      <div class="ts-row"><label>MixUp</label><input type="number" id="mixup" value="0.0" step="0.05" min="0" max="1" /></div>
+    </div>
+
+    <div class="ts-section">
+      <h2>6️⃣ Boshqalar</h2>
+      <div class="ts-row"><label>Workers</label><input type="number" id="workers" value="4" min="0" max="16" /></div>
+      <div class="ts-row"><label>Cache</label><select id="cache">
+        <option value="False" selected>Kesh yo'q</option>
+        <option value="ram">RAM (tez)</option>
+        <option value="disk">Disk</option>
+      </select></div>
+      <div class="ts-row"><label>Avto-deploy</label><select id="deploy_after">
+        <option value="true" selected>Ha — app/models/ ga ko'chir</option>
+        <option value="false">Yo'q</option>
+      </select></div>
+    </div>
+
+    <div class="ts-actions">
+      <button class="ts-btn-primary" id="startBtn">▶ Train boshlash</button>
+      <button id="stopBtn" hidden>⏹ Stop</button>
+      <span class="ts-status" id="startStatus"></span>
+    </div>
+    <div class="ts-hint" id="vramEstimate" style="margin-left:0"></div>
+  </div>
+
+  <!-- RIGHT: Monitor + Run history -->
+  <div>
+    <div class="ts-section">
+      <h2>📺 Joriy run</h2>
+      <div class="ts-status" id="currentRun">Hozircha yangi run yo'q</div>
+      <div class="ts-log" id="liveLog" hidden></div>
+    </div>
+
+    <div class="ts-section">
+      <h2>📈 Jonli grafiklar</h2>
+      <div class="ts-chart-title">Loss — train vs val (box+cls+dfl)</div>
+      <canvas id="chartLoss" class="ts-chart" width="600" height="150"></canvas>
+      <div class="ts-chart-title">mAP@50 / mAP@50-95</div>
+      <canvas id="chartMap" class="ts-chart" width="600" height="150"></canvas>
+      <div class="ts-chart-title">Precision / Recall</div>
+      <canvas id="chartPR" class="ts-chart" width="600" height="150"></canvas>
+      <div class="ts-chart-title">Accuracy / F1-score (P·R asosida, har epoch)</div>
+      <canvas id="chartAF" class="ts-chart" width="600" height="150"></canvas>
+    </div>
+
+    <div class="ts-section">
+      <h2>📜 Run tarixi <button class="ts-btn" style="float:right;font-size:11px" id="refreshRunsBtn">↻</button></h2>
+      <div class="ts-runs" id="runsTable">yuklanmoqda…</div>
+    </div>
+
+    <div class="ts-section">
+      <h2>📊 Natijalar (run tugagach)</h2>
+      <div class="ts-row">
+        <label>Run</label>
+        <select id="resultRunSel"><option value="">— tugagan run tanlang —</option></select>
+      </div>
+
+      <!-- Yakuniy metrikalar (accuracy) -->
+      <div id="resultSummary" class="ts-metric-cards"></div>
+
+      <!-- To'liq o'qitish parametrlari -->
+      <div id="resultParams"></div>
+
+      <!-- Tanlangan run grafiklari: loss / accuracy / precision-recall -->
+      <div class="ts-chart-title">📉 Loss — train vs val (box+cls+dfl)</div>
+      <canvas id="chartLossR" class="ts-chart" width="600" height="140"></canvas>
+      <div class="ts-chart-title">🎯 Aniqlik — mAP@50 / mAP@50-95</div>
+      <canvas id="chartMapR" class="ts-chart" width="600" height="140"></canvas>
+      <div class="ts-chart-title">📈 Precision / Recall</div>
+      <canvas id="chartPRR" class="ts-chart" width="600" height="140"></canvas>
+      <div class="ts-chart-title">🧮 Accuracy / F1-score (P·R asosida, har epoch)</div>
+      <canvas id="chartAFR" class="ts-chart" width="600" height="140"></canvas>
+
+      <!-- Rasm-darajali klinik metrikalar (Sensitivity/Specificity uchun TN kerak —
+           u faqat rasm darajasida mavjud: lezyonsiz rasm bo'sh chiqsa = TN) -->
+      <div class="ts-chart-title">🩺 Klinik metrikalar — rasm darajasida (val to'plam)</div>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:6px 0">
+        <label style="font-size:12px;color:var(--muted)">Conf chegara</label>
+        <select id="evalConf" style="background:var(--panel-2);color:var(--text);border:1px solid var(--border);border-radius:3px;padding:3px 6px;font-size:12px">
+          <option value="0.10">0.10</option>
+          <option value="0.25" selected>0.25</option>
+          <option value="0.40">0.40</option>
+          <option value="0.50">0.50</option>
+        </select>
+        <button class="ts-btn" id="evalBtn" style="font-size:12px">🧪 Hisoblash (val)</button>
+        <span class="ts-status" id="evalStatus"></span>
+      </div>
+      <div id="evalCards" class="ts-metric-cards"></div>
+      <div id="evalDetail" style="display:flex;gap:14px;flex-wrap:wrap;align-items:flex-start"></div>
+
+      <!-- Grafik rasmlar: ROC/PR egri, confusion matrix, F1/P/R egri -->
+      <div class="ts-chart-title">🖼 Baholash grafiklari (PR·F1·P·R egri, confusion matrix)</div>
+      <div id="resultBtns" style="display:flex;gap:6px;flex-wrap:wrap;margin:8px 0"></div>
+      <div id="resultImgWrap" style="text-align:center;min-height:40px"></div>
+      <div class="ts-chart-title">Namuna bashoratlar (test rasmlarida bbox'lar)</div>
+      <div id="resultPreds" style="display:flex;gap:6px;flex-wrap:wrap"></div>
+    </div>
+
+    <div class="ts-section">
+      <h2>📦 Eksport</h2>
+      <div class="ts-row">
+        <label>Run</label>
+        <select id="exportRunSel"><option value="">— tugagan run —</option></select>
+      </div>
+      <div class="ts-row"><label>imgsz</label><input type="number" id="exportImgsz" value="640" min="64" max="2048" /></div>
+      <div style="display:flex;gap:6px;margin:8px 0;flex-wrap:wrap">
+        <button class="ts-btn" id="exportOnnx">ONNX</button>
+        <button class="ts-btn" id="exportTrt">TensorRT</button>
+        <button class="ts-btn" id="exportVino">OpenVINO</button>
+      </div>
+      <div class="ts-status" id="exportStatus"></div>
+      <div class="ts-hint">TensorRT/OpenVINO uchun tegishli paket o'rnatilgan bo'lishi kerak (xato bo'lsa ko'rsatiladi).</div>
+    </div>
+
+    <div class="ts-section">
+      <h2>⚖️ Run solishtirish</h2>
+      <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;flex-wrap:wrap">
+        <select id="cmpRunA"><option value="">Run A</option></select>
+        <span>vs</span>
+        <select id="cmpRunB"><option value="">Run B</option></select>
+        <button class="ts-btn" id="cmpBtn">Solishtir</button>
+      </div>
+      <div id="cmpResult" style="font-size:12px"></div>
+    </div>
+
+    <div class="ts-section" id="tipsSection">
+      <h2>💡 Maslahat</h2>
+      <ul style="font-size:12px;color:var(--muted);padding-left:18px;margin:0">
+        <li><strong>Yangi data</strong>: yolo11n + pretrained ✓ + epochs=50 — eng tez sinov</li>
+        <li><strong>CPU'da</strong>: yolo11n, batch=4, imgsz=640 — qabul qilinadigan vaqt</li>
+        <li><strong>Aniqlik kerak</strong>: yolo11l yoki yolo11x + cos_lr ✓ + patience=100</li>
+        <li><strong>Fine-tune</strong>: Resume'da oldingi run tanlang + lr0=0.001 (10× past)</li>
+        <li><strong>Kichik dataset</strong>: mosaic=1.0, mixup=0.1, hsv_s=0.7 (augmentation kuchli)</li>
+        <li><strong>Klinik aniqlik</strong>: fliplr=0.0 (mammografiya yo'nalishi muhim!)</li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- ══════════════════════════════════════════════════════════════════
+       BOOLFS — Xamdamov: bulcha dasturlash asosida informativ belgilar
+       (ikkinchi bosqich klassifikator + YOLO ansambli)
+       ══════════════════════════════════════════════════════════════════ -->
+  <div class="bf-wrap">
+
+    <div class="bf-section">
+      <h2>🧮 Xamdamov usuli — bulcha belgilar tanlash <span class="bf-badge">2-bosqich klassifikator</span></h2>
+      <p class="bf-sub">
+        R.X. Xamdamov, «Задачи, модели и методы булева программирования» (Toshkent, 2017), III bob va 3.6-bo'lim.
+        YOLO faqat ROI'ni topadi; sinf esa 38 ta radiomika belgisidan tanlangan informativ qism-to'plam bo'yicha
+        minimal masofa qoidasi bilan qayta baholanadi va YOLO skori bilan ansambl qilinadi.
+      </p>
+      <div class="bf-formula">Ф(λ) = Σ a<sub>j</sub>λ<sub>j</sub> / Σ (b<sub>j</sub>+c<sub>j</sub>)λ<sub>j</sub> → max, λ<sub>j</sub> ∈ {0,1}</div>
+      <div class="bf-formula">ρ<sub>p</sub>(x) = Σ λ<sub>j</sub>(x<sub>j</sub> − x̄<sup>p</sup><sub>j</sub>)² / S(X<sub>p</sub>) &nbsp;→&nbsp; sinf(x) = argmin<sub>p</sub> ρ<sub>p</sub>(x)</div>
+      <div class="bf-formula">z<sub>p</sub> = α·YOLO<sub>p</sub> + (1−α)·s<sub>p</sub></div>
+
+      <div class="bf-grid" style="margin-top:14px">
+        <!-- Konfiguratsiya -->
+        <div>
+          <div class="bf-row">
+            <label>Dataset (data.yaml)</label>
+            <select id="bfDataset"><option value="">— yuklanmoqda —</option></select>
+          </div>
+          <div class="bf-row">
+            <label>YOLO modeli</label>
+            <select id="bfWeights"><option value="">— ansamblsiz (faqat boolfs) —</option></select>
+          </div>
+          <div class="bf-hint">Ansambl uchun 8-sinfli o'qitilgan model tanlang. Har xil modellarni sinab, natijalarni solishtiring.</div>
+          <div class="bf-row">
+            <label>α (YOLO ulushi)</label>
+            <input type="number" id="bfAlpha" value="0.5" step="0.1" min="0" max="1" />
+          </div>
+          <div class="bf-hint">0.3 / 0.5 / 0.7 va 0 / 1 baribir hisoblanadi — jadvalda solishtiriladi.</div>
+          <div class="bf-row">
+            <label>n* (belgilar soni)</label>
+            <input type="number" id="bfNstar" value="0" min="0" max="38" />
+          </div>
+          <div class="bf-hint">0 = P(n′) maksimumi bo'yicha avtomatik tanlansin (tavsiya).</div>
+        </div>
+        <div>
+          <div class="bf-row">
+            <label>Baholash bo'linmasi</label>
+            <select id="bfSplit"><option value="val" selected>val</option><option value="train">train</option></select>
+          </div>
+          <div class="bf-row">
+            <label>CV foldlar</label>
+            <select id="bfFolds">
+              <option value="3">3</option><option value="5" selected>5</option><option value="10">10</option>
+            </select>
+          </div>
+          <div class="bf-hint">Kam misolli sinflar baribir leave-one-out bilan baholanadi.</div>
+          <div class="bf-row">
+            <label>Detektsiya conf</label>
+            <input type="number" id="bfConf" value="0.05" step="0.01" min="0.01" max="0.9" />
+          </div>
+          <div class="bf-row">
+            <label>Moslash IoU</label>
+            <input type="number" id="bfIou" value="0.3" step="0.05" min="0.1" max="0.9" />
+          </div>
+          <div class="bf-row">
+            <label>Izoh (sinov nomi)</label>
+            <input type="text" id="bfNote" placeholder="mas. yolo11s + alpha 0.7" />
+          </div>
+        </div>
+      </div>
+
+      <div style="display:flex;gap:10px;align-items:center;margin-top:14px;flex-wrap:wrap">
+        <button class="bf-btn" id="bfRunBtn">▶ Sinovni boshlash</button>
+        <button class="bf-btn-stop" id="bfStopBtn" hidden>⏹ To'xtatish</button>
+        <button class="bf-btn-ghost" id="bfRefreshBtn">↻ Sinovlar ro'yxati</button>
+        <span class="ts-status" id="bfStatus"></span>
+      </div>
+      <div class="bf-prog" id="bfProgWrap" hidden><i id="bfProg"></i></div>
+      <div class="bf-log" id="bfLog" hidden></div>
+    </div>
+
+    <div class="bf-section">
+      <h2>📊 Sinov natijalari</h2>
+      <p class="bf-sub">Sinovni tanlang — ranjirlangan qator, Ф(n′)/P(n′) egri chizig'i, ajraluvchanlik matritsasi va ansambl taqqoslash.</p>
+      <div class="bf-grid">
+        <div>
+          <div style="font-size:12px;color:var(--bf-dim);margin-bottom:4px">Sinovlar tarixi</div>
+          <div class="bf-runs"><table class="bf-tbl" id="bfRunsTable"><tr><td>yuklanmoqda…</td></tr></table></div>
+        </div>
+        <div>
+          <div id="bfSummary" class="bf-cards"></div>
+          <div id="bfAlphaTable"></div>
+        </div>
+      </div>
+      <div id="bfResult" style="margin-top:14px"></div>
+    </div>
+
+  </div>
+
+</div>
+
+<script src="train.js"></script>
+<script src="boolfs.js"></script>
+</body>
+</html>
